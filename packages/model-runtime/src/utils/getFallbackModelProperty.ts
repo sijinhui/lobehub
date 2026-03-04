@@ -18,7 +18,8 @@ const resolveCanonicalProvider = (modelId: string): string | undefined => {
  * @param propertyName The name of the property.
  * @param providerId Optional provider ID for an exact match.
  * @returns The property value or a default value.
- */export const getModelPropertyWithFallback = async <T>(
+ */
+export const getModelPropertyWithFallback = async <T>(
   modelId: string,
   propertyName: keyof AiFullModelCard,
   providerId?: string,
