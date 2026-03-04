@@ -348,6 +348,14 @@ export default {
   'marketPublish.validation.emptySystemRole': 'Cannot publish: System Role is required',
   'marketPublish.validation.underReview':
     'Your new version is currently under review. Please wait for approval before publishing a new version.',
+  'memory.effort.desc': 'Control how aggressively the AI retrieves and updates memory.',
+  'memory.effort.high': 'High — Proactive retrieval and updates',
+  'memory.effort.level.high': 'High',
+  'memory.effort.level.low': 'Low',
+  'memory.effort.level.medium': 'Medium',
+  'memory.effort.low': 'Low — Minimal memory operations',
+  'memory.effort.medium': 'Medium — Balanced behavior',
+  'memory.effort.title': 'Aggressiveness',
   'memory.enabled.desc':
     'Allow LobeHub to extract preferences and info from conversations and use them later. You can view, edit, or clear memory anytime.',
   'memory.enabled.title': 'Enable Memory',
@@ -832,6 +840,11 @@ When I am ___, I need ___
   'tools.builtins.lobe-artifacts.readme':
     'Generate and live-preview interactive UI components, data visualizations, charts, SVG graphics, and web applications. Create rich visual content that users can interact with directly.',
   'tools.builtins.lobe-artifacts.title': 'Artifacts',
+  'tools.builtins.lobe-calculator.title': 'Calculator',
+  'tools.builtins.lobe-calculator.description':
+    'Perform mathematical calculations, solve equations, and work with symbolic expressions',
+  'tools.builtins.lobe-calculator.readme':
+    'Advanced mathematical calculator supporting basic arithmetic, algebraic equations, calculus operations, and symbolic math. Includes base conversion, equation solving, differentiation, integration, and more.',
   'tools.builtins.lobe-cloud-sandbox.description':
     'Execute code, run commands, and manage files in a secure cloud environment',
   'tools.builtins.lobe-cloud-sandbox.readme':

@@ -1,5 +1,7 @@
 // Context Provider exports
 export { AgentBuilderContextInjector } from './AgentBuilderContextInjector';
+export { AgentManagementContextInjector } from './AgentManagementContextInjector';
+export { DiscordContextProvider } from './DiscordContextProvider';
 export { EvalContextSystemInjector } from './EvalContextSystemInjector';
 export { ForceFinishSummaryInjector } from './ForceFinishSummaryInjector';
 export { GroupAgentBuilderContextInjector } from './GroupAgentBuilderContextInjector';
@@ -23,6 +25,14 @@ export type {
   AgentBuilderContextInjectorConfig,
   OfficialToolItem,
 } from './AgentBuilderContextInjector';
+export type {
+  AgentManagementContext,
+  AgentManagementContextInjectorConfig,
+  AvailableModelInfo,
+  AvailablePluginInfo,
+  AvailableProviderInfo,
+} from './AgentManagementContextInjector';
+export type { DiscordContext, DiscordContextProviderConfig } from './DiscordContextProvider';
 export type { EvalContext, EvalContextSystemInjectorConfig } from './EvalContextSystemInjector';
 export type { ForceFinishSummaryInjectorConfig } from './ForceFinishSummaryInjector';
 export type {

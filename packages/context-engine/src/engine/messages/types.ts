@@ -6,6 +6,8 @@ import type { OpenAIChatMessage, UIChatMessage } from '@/types/index';
 
 import type { AgentInfo } from '../../processors/GroupRoleTransform';
 import type { AgentBuilderContext } from '../../providers/AgentBuilderContextInjector';
+import type { AgentManagementContext } from '../../providers/AgentManagementContextInjector';
+import type { DiscordContext } from '../../providers/DiscordContextProvider';
 import type { EvalContext } from '../../providers/EvalContextSystemInjector';
 import type { GroupAgentBuilderContext } from '../../providers/GroupAgentBuilderContextInjector';
 import type { GroupMemberInfo } from '../../providers/GroupContextInjector';
@@ -114,11 +116,18 @@ export interface UserMemoryActivityItem {
 }
 
 export interface UserMemoryIdentityItem {
+  capturedAt?: string | Date | null;
   description?: string | null;
   id?: string;
   role?: string | null;
   /** Identity type: personal (role), professional (occupation), demographic (attribute) */
   type?: 'demographic' | 'personal' | 'professional' | string | null;
+  [key: string]: unknown;
+}
+
+export interface UserMemoryPersonaItem {
+  narrative?: string | null;
+  tagline?: string | null;
   [key: string]: unknown;
 }
 
@@ -131,6 +140,7 @@ export interface UserMemoryData {
   contexts: UserMemoryContextItem[];
   experiences: UserMemoryExperienceItem[];
   identities?: UserMemoryIdentityItem[];
+  persona?: UserMemoryPersonaItem;
   preferences: UserMemoryPreferenceItem[];
 }
 
@@ -243,8 +253,12 @@ export interface MessagesEngineParams {
   // ========== Extended contexts (both frontend and backend) ==========
   /** Agent Builder context */
   agentBuilderContext?: AgentBuilderContext;
+  /** Discord context for injecting channel/guild info into system injection message */
+  discordContext?: DiscordContext;
   /** Eval context for injecting environment prompts into system message */
   evalContext?: EvalContext;
+  /** Agent Management context */
+  agentManagementContext?: AgentManagementContext;
   /** Agent group configuration for multi-agent scenarios */
   agentGroup?: AgentGroupConfig;
   /** Group Agent Builder context */
@@ -299,6 +313,8 @@ export interface MessagesEngineResult {
 
 export { type AgentInfo } from '../../processors/GroupRoleTransform';
 export { type AgentBuilderContext } from '../../providers/AgentBuilderContextInjector';
+export { type AgentManagementContext } from '../../providers/AgentManagementContextInjector';
+export { type DiscordContext } from '../../providers/DiscordContextProvider';
 export { type EvalContext } from '../../providers/EvalContextSystemInjector';
 export { type GroupAgentBuilderContext } from '../../providers/GroupAgentBuilderContextInjector';
 export { type GTDPlan } from '../../providers/GTDPlanInjector';

@@ -22,6 +22,8 @@ import {
 } from '../../processors';
 import {
   AgentBuilderContextInjector,
+  AgentManagementContextInjector,
+  DiscordContextProvider,
   EvalContextSystemInjector,
   ForceFinishSummaryInjector,
   GroupAgentBuilderContextInjector,
@@ -130,7 +132,9 @@ export class MessagesEngine {
       variableGenerators,
       fileContext,
       agentBuilderContext,
+      discordContext,
       evalContext,
+      agentManagementContext,
       groupAgentBuilderContext,
       agentGroup,
       gtd,
@@ -142,6 +146,8 @@ export class MessagesEngine {
     } = this.params;
 
     const isAgentBuilderEnabled = !!agentBuilderContext;
+    const isAgentManagementEnabled = !!agentManagementContext;
+
     const isGroupAgentBuilderEnabled = !!groupAgentBuilderContext;
     const isAgentGroupEnabled = agentGroup?.agentMap && Object.keys(agentGroup.agentMap).length > 0;
     const isGroupContextEnabled =
@@ -194,6 +200,11 @@ export class MessagesEngine {
         systemPrompt: agentGroup?.systemPrompt,
       }),
 
+      // 5.5. Discord context injection (channel/guild info for Discord bot scenarios)
+      ...(discordContext
+        ? [new DiscordContextProvider({ context: discordContext, enabled: true })]
+        : []),
+
       // 6. GTD Plan injection (conditionally added, after user memory, before knowledge)
       ...(isGTDPlanEnabled ? [new GTDPlanInjector({ enabled: true, plan: gtd.plan })] : []),
 
@@ -218,7 +229,13 @@ export class MessagesEngine {
         agentContext: agentBuilderContext,
       }),
 
-      // 10. Group Agent Builder context injection (current group config/members for editing)
+      // 7. Agent Management context injection (available models and plugins for agent creation)
+      new AgentManagementContextInjector({
+        enabled: isAgentManagementEnabled,
+        context: agentManagementContext,
+      }),
+
+      // 8. Group Agent Builder context injection (current group config/members for editing)
       new GroupAgentBuilderContextInjector({
         enabled: isGroupAgentBuilderEnabled,
         groupContext: groupAgentBuilderContext,
