@@ -119,41 +119,6 @@ const anthropicChatModels: AIChatModelCard[] = [
       vision: true,
     },
     contextWindowTokens: 200_000,
-    description:
-      'Claude Sonnet 4.6 delivers frontier intelligence at scale built for coding, agents, and enterprise workflows.',
-    displayName: 'Claude Sonnet 4.6',
-    enabled: true,
-    id: 'claude-sonnet-4-6',
-    maxOutput: 64_000,
-    pricing: {
-      units: [
-        { name: 'textInput_cacheRead', rate: 0.3, strategy: 'fixed', unit: 'millionTokens' },
-        { name: 'textInput', rate: 3, strategy: 'fixed', unit: 'millionTokens' },
-        { name: 'textOutput', rate: 15, strategy: 'fixed', unit: 'millionTokens' },
-        {
-          lookup: { prices: { '1h': 6, '5m': 3.75 }, pricingParams: ['ttl'] },
-          name: 'textInput_cacheWrite',
-          strategy: 'lookup',
-          unit: 'millionTokens',
-        },
-      ],
-    },
-    releasedAt: '2026-02-20',
-    settings: {
-      extendParams: ['disableContextCaching', 'enableAdaptiveThinking', 'effort'],
-      searchImpl: 'params',
-    },
-    type: 'chat',
-  },
-  {
-    abilities: {
-      functionCall: true,
-      reasoning: true,
-      search: true,
-      structuredOutput: true,
-      vision: true,
-    },
-    contextWindowTokens: 200_000,
     description: 'Claude Sonnet 4.5 is Anthropic’s most intelligent model to date.',
     displayName: 'Claude Sonnet 4.5',
     id: 'claude-sonnet-4-5-20250929',
