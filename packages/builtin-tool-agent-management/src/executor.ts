@@ -194,7 +194,11 @@ class AgentManagementExecutor extends BaseExecutor<typeof AgentManagementApiName
           // The message.agentId will still be current agent, but metadata stores subAgentId + scope
           await get().internal_execAgentRuntime({
             context: { ...conversationContext, subAgentId: agentId, scope: 'sub_agent' },
+<<<<<<< HEAD
             messages: messages,
+=======
+            messages,
+>>>>>>> origin/main
             parentMessageId: ctx.messageId,
             parentMessageType: 'tool',
           });

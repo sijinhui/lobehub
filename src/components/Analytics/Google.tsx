@@ -1,11 +1,22 @@
 'use client';
+<<<<<<< HEAD
+
+import { memo, useEffect } from 'react';
+=======
+>>>>>>> origin/main
 
 import { memo, useEffect } from 'react';
 
-import { analyticsEnv } from '@/envs/analytics';
-
+<<<<<<< HEAD
 const GoogleAnalytics = memo(() => {
   const gaId = analyticsEnv.GOOGLE_ANALYTICS_MEASUREMENT_ID;
+=======
+interface GoogleAnalyticsProps {
+  gaId?: string;
+}
+
+const GoogleAnalytics = memo<GoogleAnalyticsProps>(({ gaId }) => {
+>>>>>>> origin/main
   useEffect(() => {
     if (!gaId) return;
 

@@ -2,11 +2,15 @@
 
 import { FluentEmoji, Text } from '@lobehub/ui';
 import { Result } from 'antd';
+import { useSearchParams } from 'next/navigation';
 import React, { memo, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+<<<<<<< HEAD
 import { useSearchParams } from 'next/navigation';
 
+=======
+>>>>>>> origin/main
 const SuccessPage = memo(() => {
   const { t } = useTranslation('oauth');
   const searchParams = useSearchParams();

@@ -22,6 +22,8 @@ import {
 } from '../../processors';
 import {
   AgentBuilderContextInjector,
+  AgentManagementContextInjector,
+  DiscordContextProvider,
   EvalContextSystemInjector,
   ForceFinishSummaryInjector,
   AgentManagementContextInjector,
@@ -131,6 +133,7 @@ export class MessagesEngine {
       variableGenerators,
       fileContext,
       agentBuilderContext,
+      discordContext,
       evalContext,
       agentManagementContext,
       groupAgentBuilderContext,
@@ -197,6 +200,11 @@ export class MessagesEngine {
         members: agentGroup?.members,
         systemPrompt: agentGroup?.systemPrompt,
       }),
+
+      // 5.5. Discord context injection (channel/guild info for Discord bot scenarios)
+      ...(discordContext
+        ? [new DiscordContextProvider({ context: discordContext, enabled: true })]
+        : []),
 
       // 6. GTD Plan injection (conditionally added, after user memory, before knowledge)
       ...(isGTDPlanEnabled ? [new GTDPlanInjector({ enabled: true, plan: gtd.plan })] : []),

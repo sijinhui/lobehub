@@ -49,7 +49,11 @@ export const lobehubImageModels: AIImageModelCard[] = [
     description:
       "Nano Banana is Google's newest, fastest, and most efficient native multimodal model, enabling conversational image generation and editing.",
     displayName: 'Nano Banana',
+<<<<<<< HEAD
     id: 'gemini-2.5-flash-image-preview:image',
+=======
+    id: 'gemini-2.5-flash-image:image',
+>>>>>>> origin/main
     parameters: nanoBananaParameters,
     pricing: {
       approximatePricePerImage: 0.039,

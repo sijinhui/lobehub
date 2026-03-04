@@ -4,6 +4,10 @@ import type { PluginOption, ViteDevServer } from 'vite';
 import { defineConfig, loadEnv } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
+<<<<<<< HEAD
+=======
+import { viteEnvRestartKeys } from './plugins/vite/envRestartKeys';
+>>>>>>> origin/main
 import {
   sharedOptimizeDeps,
   sharedRendererDefine,
@@ -31,12 +35,17 @@ export default defineConfig({
   define: sharedRendererDefine({ isMobile, isElectron: false }),
   optimizeDeps: sharedOptimizeDeps,
   plugins: [
+<<<<<<< HEAD
+=======
+    viteEnvRestartKeys(['APP_URL']),
+>>>>>>> origin/main
     ...sharedRendererPlugins({ platform }),
 
     isDev && {
       name: 'lobe-dev-proxy-print',
       configureServer(server: ViteDevServer) {
         const ONLINE_HOST = 'https://app.lobehub.com';
+<<<<<<< HEAD
         server.httpServer?.once('listening', () => {
           const address = server.httpServer?.address();
           const port = typeof address === 'object' && address ? address.port : 9876;
@@ -49,6 +58,25 @@ export default defineConfig({
             console.info();
           }, 100);
         });
+=======
+        const c = {
+          green: (s: string) => `\x1B[32m${s}\x1B[0m`,
+          bold: (s: string) => `\x1B[1m${s}\x1B[0m`,
+          cyan: (s: string) => `\x1B[36m${s}\x1B[0m`,
+        };
+        const { info } = server.config.logger;
+        return () => {
+          server.printUrls = () => {
+            const urls = server.resolvedUrls;
+            if (!urls?.local?.[0]) return;
+            const localHost = urls.local[0].replace(/\/$/, '');
+            const proxyUrl = `${ONLINE_HOST}/_dangerous_local_dev_proxy?debug-host=${encodeURIComponent(localHost)}`;
+            const colorUrl = (url: string) =>
+              c.cyan(url.replace(/:(\d+)\//, (_, port) => `:${c.bold(port)}/`));
+            info(`  ${c.green('➜')}  ${c.bold('Debug Proxy')}: ${colorUrl(proxyUrl)}`);
+          };
+        };
+>>>>>>> origin/main
       },
     },
 
@@ -97,6 +125,10 @@ export default defineConfig({
   server: {
     cors: true,
     port: 9876,
+<<<<<<< HEAD
+=======
+    host: true,
+>>>>>>> origin/main
     proxy: {
       '/api': 'http://localhost:3010',
       '/oidc': 'http://localhost:3010',
@@ -104,7 +136,13 @@ export default defineConfig({
       '/webapi': 'http://localhost:3010',
     },
     warmup: {
+<<<<<<< HEAD
       clientFiles: ['./src/entry.web.tsx', './src/entry.desktop.tsx', './src/entry.mobile.tsx'],
+=======
+      clientFiles: [
+        platform === 'mobile' ? './src/spa/entry.mobile.tsx' : './src/spa/entry.web.tsx',
+      ],
+>>>>>>> origin/main
     },
   },
 });

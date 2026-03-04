@@ -4,7 +4,16 @@ import { LobeHub, ModelIcon, ProviderIcon } from '@lobehub/icons';
 import { type FlexboxProps } from '@lobehub/ui';
 import { Avatar, Flexbox, Icon, Tag, Text, Tooltip } from '@lobehub/ui';
 import { createStaticStyles, useResponsive } from 'antd-style';
-import { Gift, Infinity, LucideEye, LucideFlame, LucideImage, LucidePaperclip, Video, Wrench } from 'lucide-react';
+import {
+  Gift,
+  Infinity as InfinityIcon,
+  LucideEye,
+  LucideFlame,
+  LucideImage,
+  LucidePaperclip,
+  Video,
+  Wrench,
+} from 'lucide-react';
 import { type ModelAbilities } from 'model-bank';
 import numeral from 'numeral';
 import { type CSSProperties, type FC } from 'react';
@@ -195,7 +204,7 @@ const Context = memo(
 
     const tag = (
       <Tag className={styles.token} size={'small'}>
-        {contextWindowTokens === 0 ? <Infinity size={17} strokeWidth={1.6} /> : tokensText}
+        {contextWindowTokens === 0 ? <InfinityIcon size={17} strokeWidth={1.6} /> : tokensText}
       </Tag>
     );
 
