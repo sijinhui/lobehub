@@ -168,8 +168,21 @@ export const transformToAiModelList = async ({
       );
 
       if (!knownModel) {
-        knownModel = LOBE_DEFAULT_MODEL_LIST.find((model) => model.id === toAddModel.id);
-        if (knownModel) knownModel.providerId = providerId;
+        const canonicalProviderId = Object.entries({
+          claude: 'anthropic',
+          gemini: 'google',
+        }).find(([p]) => toAddModel.id.startsWith(`${p}-`))?.[1];
+        const found =
+          (canonicalProviderId
+            ? LOBE_DEFAULT_MODEL_LIST.find(
+                (model) => model.id === toAddModel.id && model.providerId === canonicalProviderId,
+              )
+            : undefined) ??
+          LOBE_DEFAULT_MODEL_LIST.find(
+            (model) => model.id === toAddModel.id && toAddModel.id.startsWith(model.providerId),
+          ) ??
+          LOBE_DEFAULT_MODEL_LIST.find((model) => model.id === toAddModel.id);
+        if (found) knownModel = { ...found, providerId };
       }
       if (withDeploymentName) {
         toAddModel.config = toAddModel.config || {};
