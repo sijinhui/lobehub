@@ -9,7 +9,7 @@ import debug from 'debug';
 
 import { type LobeRuntimeAI } from '../../core/BaseAI';
 import { buildGoogleMessages, buildGoogleTools } from '../../core/contextBuilders/google';
-import { GoogleGenerativeAIStream, VertexAIStream } from '../../core/streams';
+import { GoogleGenerativeAIStream } from '../../core/streams';
 import { LOBE_ERROR_KEY } from '../../core/streams/google';
 import {
   type ChatCompletionTool,
@@ -198,7 +198,9 @@ export class LobeGoogleAI implements LobeRuntimeAI {
         systemInstruction: modelsDisableInstuction.has(model)
           ? undefined
           : (payload.system as string),
-        temperature: payload.temperature,
+        temperature: modelsWithModalities.has(model)
+          ? Math.min(payload.temperature ?? 1, 1)
+          : payload.temperature,
         thinkingConfig:
           modelsDisableInstuction.has(model) || model.toLowerCase().includes('learnlm')
             ? undefined
@@ -231,8 +233,7 @@ export class LobeGoogleAI implements LobeRuntimeAI {
       // Convert the response into a friendly text-stream
       const pricing = await getModelPricing(model, this.provider);
 
-      const Stream = this.isVertexAi ? VertexAIStream : GoogleGenerativeAIStream;
-      const stream = Stream(prod, {
+      const stream = GoogleGenerativeAIStream(prod, {
         callbacks: options?.callback,
         inputStartAt,
         payload: { model, pricing, provider: this.provider },

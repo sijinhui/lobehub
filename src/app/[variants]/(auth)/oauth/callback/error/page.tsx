@@ -2,13 +2,17 @@
 
 import { Button, Flexbox, FluentEmoji, Highlighter, Text } from '@lobehub/ui';
 import { Result } from 'antd';
+import Link from 'next/link';
 import { parseAsString, useQueryState } from 'nuqs';
-import React, { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
+<<<<<<< HEAD
 import Link from 'next/link';
 
 const FailedPage = memo(() => {
+=======
+const FailedPage = () => {
+>>>>>>> origin/main
   const { t } = useTranslation('oauth');
   const [reason] = useQueryState('reason');
   const [errorMessage] = useQueryState<string>('errorMessage', parseAsString);
@@ -41,8 +45,6 @@ const FailedPage = memo(() => {
       }
     />
   );
-});
-
-FailedPage.displayName = 'FailedPage';
+};
 
 export default FailedPage;

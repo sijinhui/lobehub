@@ -28,6 +28,12 @@ declare global {
     };
   }
 
+<<<<<<< HEAD
+=======
+  /** Vite define: running in CI environment (e.g. CI=true) */
+  const __CI__: boolean;
+
+>>>>>>> origin/main
   /** Vite define: current bundle is mobile variant */
   const __MOBILE__: boolean;
 

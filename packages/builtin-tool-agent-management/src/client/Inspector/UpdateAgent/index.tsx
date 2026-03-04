@@ -40,10 +40,17 @@ export const UpdateAgentInspector = memo<BuiltinInspectorProps<UpdateAgentParams
 
     return (
       <Flexbox
+<<<<<<< HEAD
         align={'center'}
         className={cx(styles.root, isArgumentsStreaming && shinyTextStyles.shinyText)}
         gap={8}
         horizontal
+=======
+        horizontal
+        align={'center'}
+        className={cx(styles.root, isArgumentsStreaming && shinyTextStyles.shinyText)}
+        gap={8}
+>>>>>>> origin/main
       >
         <span className={styles.title}>
           {t('builtins.lobe-agent-management.inspector.updateAgent.title')}

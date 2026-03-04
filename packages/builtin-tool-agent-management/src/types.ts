@@ -266,6 +266,14 @@ export interface CallAgentParams {
    */
   runAsTask?: boolean;
   /**
+<<<<<<< HEAD
+=======
+   * If true (and in a group context), skip calling supervisor after agent responds.
+   * Only relevant when used within agent groups. Default: false
+   */
+  skipCallSupervisor?: boolean;
+  /**
+>>>>>>> origin/main
    * Task title (required when runAsTask is true)
    */
   taskTitle?: string;
@@ -273,11 +281,14 @@ export interface CallAgentParams {
    * Timeout in milliseconds for task execution (default: 1800000 = 30 minutes)
    */
   timeout?: number;
+<<<<<<< HEAD
   /**
    * If true (and in a group context), skip calling supervisor after agent responds.
    * Only relevant when used within agent groups. Default: false
    */
   skipCallSupervisor?: boolean;
+=======
+>>>>>>> origin/main
 }
 
 export interface CallAgentState {
@@ -294,6 +305,7 @@ export interface CallAgentState {
    */
   mode: 'speak' | 'task';
   /**
+<<<<<<< HEAD
    * Task ID if running as background task
    */
   taskId?: string;
@@ -301,4 +313,13 @@ export interface CallAgentState {
    * Whether to skip calling supervisor after agent responds (only relevant in group context)
    */
   skipCallSupervisor?: boolean;
+=======
+   * Whether to skip calling supervisor after agent responds (only relevant in group context)
+   */
+  skipCallSupervisor?: boolean;
+  /**
+   * Task ID if running as background task
+   */
+  taskId?: string;
+>>>>>>> origin/main
 }
