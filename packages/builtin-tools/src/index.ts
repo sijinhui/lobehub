@@ -1,4 +1,6 @@
 import { AgentBuilderManifest } from '@lobechat/builtin-tool-agent-builder';
+import { CalculatorManifest } from '@lobechat/builtin-tool-calculator';
+import { AgentManagementManifest } from '@lobechat/builtin-tool-agent-management';
 import { CloudSandboxManifest } from '@lobechat/builtin-tool-cloud-sandbox';
 import { GroupAgentBuilderManifest } from '@lobechat/builtin-tool-group-agent-builder';
 import { GroupManagementManifest } from '@lobechat/builtin-tool-group-management';
@@ -107,6 +109,12 @@ export const builtinTools: LobeBuiltinTool[] = [
     type: 'builtin',
   },
   {
+    hidden: true,
+    identifier: AgentManagementManifest.identifier,
+    manifest: AgentManagementManifest,
+    type: 'builtin',
+  },
+  {
     identifier: GTDManifest.identifier,
     manifest: GTDManifest,
     type: 'builtin',
@@ -114,6 +122,11 @@ export const builtinTools: LobeBuiltinTool[] = [
   {
     identifier: NotebookManifest.identifier,
     manifest: NotebookManifest,
+    type: 'builtin',
+  },
+  {
+    identifier: CalculatorManifest.identifier,
+    manifest: CalculatorManifest,
     type: 'builtin',
   },
 ];
