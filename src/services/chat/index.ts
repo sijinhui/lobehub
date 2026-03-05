@@ -332,14 +332,22 @@ class ChatService {
       model = findDeploymentName(model, provider);
     }
 
-    // When user explicitly disables Responses API, set apiMode to 'chatCompletion'
-    // This ensures the user's preference takes priority over provider's useResponseModels config
-    // When user enables Responses API, set to 'responses' to force use Responses API
-    const apiMode: 'responses' | 'chatCompletion' = aiProviderSelectors.isProviderEnableResponseApi(
-      provider,
-    )(getAiInfraStoreState())
-      ? 'responses'
-      : 'chatCompletion';
+    const providerRuntimeConfig = aiProviderSelectors.providerConfigById(provider)(
+      getAiInfraStoreState(),
+    );
+    const explicitEnableResponseApi = providerRuntimeConfig?.config?.enableResponseApi;
+
+    // Only force apiMode when user explicitly configured the provider-level switch.
+    // For OpenAI with no explicit setting, leave apiMode undefined and let runtime
+    // decide based on model capabilities (e.g., avoid forcing responses for deepseek-chat).
+    const apiMode: 'responses' | 'chatCompletion' | undefined =
+      typeof explicitEnableResponseApi === 'boolean'
+        ? explicitEnableResponseApi
+          ? 'responses'
+          : 'chatCompletion'
+        : provider === ModelProvider.OpenAI
+          ? undefined
+          : 'chatCompletion';
 
     // Get the chat config to check streaming preference
     const chatConfig = agentChatConfigSelectors.currentChatConfig(getAgentStoreState());

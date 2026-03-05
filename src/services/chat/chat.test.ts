@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_AGENT_CONFIG } from '@/const/settings';
 import * as toolEngineeringModule from '@/helpers/toolEngineering';
 import { agentSelectors, chatConfigByIdSelectors } from '@/store/agent/selectors';
-import { aiModelSelectors } from '@/store/aiInfra';
+import { aiModelSelectors, aiProviderSelectors } from '@/store/aiInfra';
 import { useToolStore } from '@/store/tool';
 
 import { chatService } from './index';
@@ -1206,7 +1206,6 @@ describe('ChatService', () => {
         stream: true,
         ...DEFAULT_AGENT_CONFIG.params,
         ...params,
-        apiMode: 'responses',
       };
 
       await chatService.getChatCompletion(params, options);
@@ -1240,6 +1239,70 @@ describe('ChatService', () => {
       };
 
       await chatService.getChatCompletion(params, options);
+
+      expect(mockFetchSSE).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          body: JSON.stringify(expectedPayload),
+          headers: expect.any(Object),
+          method: 'POST',
+        }),
+      );
+    });
+
+    it('should force responses apiMode when openai enableResponseApi is explicitly true', async () => {
+      vi.spyOn(aiProviderSelectors, 'providerConfigById').mockReturnValue(
+        () => ({ config: { enableResponseApi: true } }) as any,
+      );
+
+      const params: Partial<ChatStreamPayload> = {
+        model: 'deepseek-chat',
+        provider: 'openai',
+        messages: [],
+      };
+
+      const expectedPayload = {
+        model: 'deepseek-chat',
+        stream: true,
+        ...DEFAULT_AGENT_CONFIG.params,
+        messages: [],
+        apiMode: 'responses',
+        provider: undefined,
+      };
+
+      await chatService.getChatCompletion(params, {});
+
+      expect(mockFetchSSE).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          body: JSON.stringify(expectedPayload),
+          headers: expect.any(Object),
+          method: 'POST',
+        }),
+      );
+    });
+
+    it('should force chatCompletion apiMode when openai enableResponseApi is explicitly false', async () => {
+      vi.spyOn(aiProviderSelectors, 'providerConfigById').mockReturnValue(
+        () => ({ config: { enableResponseApi: false } }) as any,
+      );
+
+      const params: Partial<ChatStreamPayload> = {
+        model: 'deepseek-chat',
+        provider: 'openai',
+        messages: [],
+      };
+
+      const expectedPayload = {
+        model: 'deepseek-chat',
+        stream: true,
+        ...DEFAULT_AGENT_CONFIG.params,
+        messages: [],
+        apiMode: 'chatCompletion',
+        provider: undefined,
+      };
+
+      await chatService.getChatCompletion(params, {});
 
       expect(mockFetchSSE).toHaveBeenCalledWith(
         expect.any(String),
