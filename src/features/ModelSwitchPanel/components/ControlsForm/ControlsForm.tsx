@@ -5,8 +5,6 @@ import isEqual from 'fast-deep-equal';
 import { memo } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 
-import { useAgentId } from '@/features/ChatInput/hooks/useAgentId';
-import { useUpdateAgentConfig } from '@/features/ChatInput/hooks/useUpdateAgentConfig';
 import { useAgentStore } from '@/store/agent';
 import { agentByIdSelectors, chatConfigByIdSelectors } from '@/store/agent/selectors';
 import { aiModelSelectors, useAiInfraStore } from '@/store/aiInfra';
@@ -32,14 +30,17 @@ import ThinkingLevelSlider from './ThinkingLevelSlider';
 import ThinkingSlider from './ThinkingSlider';
 
 interface ControlsFormProps {
+  agentId?: string;
   model?: string;
   provider?: string;
 }
 
-const ControlsForm = memo<ControlsFormProps>(({ model: modelProp, provider: providerProp }) => {
+const ControlsForm = memo<ControlsFormProps>(
+  ({ agentId: agentIdProp, model: modelProp, provider: providerProp }) => {
   const { t } = useTranslation('chat');
-  const agentId = useAgentId();
-  const { updateAgentChatConfig } = useUpdateAgentConfig();
+  const activeAgentId = useAgentStore((s) => s.activeAgentId);
+  const agentId = agentIdProp || activeAgentId || '';
+  const updateAgentChatConfigById = useAgentStore((s) => s.updateAgentChatConfigById);
   const [agentModel, agentProvider] = useAgentStore((s) => [
     agentByIdSelectors.getAgentModelById(agentId)(s),
     agentByIdSelectors.getAgentModelProviderById(agentId)(s),
@@ -355,7 +356,7 @@ const ControlsForm = memo<ControlsFormProps>(({ model: modelProp, provider: prov
           .filter(Boolean) as FormItemProps[]
       }
       onValuesChange={async (_, values) => {
-        await updateAgentChatConfig(values);
+        await updateAgentChatConfigById(agentId, values);
       }}
     />
   );

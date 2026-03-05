@@ -5,8 +5,6 @@ import { type SliderSingleProps } from 'antd/es/slider';
 import { type CSSProperties } from 'react';
 import { memo } from 'react';
 
-import { useAgentId } from '@/features/ChatInput/hooks/useAgentId';
-import { useUpdateAgentConfig } from '@/features/ChatInput/hooks/useUpdateAgentConfig';
 import { useAgentStore } from '@/store/agent';
 import { chatConfigByIdSelectors } from '@/store/agent/selectors';
 
@@ -67,14 +65,14 @@ export function createLevelSliderComponent<T extends string>(config: LevelSlider
 
   // Store-connected component - uses agent store hooks
   const LevelSliderWithStore = memo<{ defaultValue: T }>(({ defaultValue: dv }) => {
-    const agentId = useAgentId();
-    const { updateAgentChatConfig } = useUpdateAgentConfig();
+    const agentId = useAgentStore((s) => s.activeAgentId) || '';
+    const updateAgentChatConfigById = useAgentStore((s) => s.updateAgentChatConfigById);
     const agentConfig = useAgentStore((s) => chatConfigByIdSelectors.getChatConfigById(agentId)(s));
 
     const storeValue = (agentConfig[configKey] as T) || dv;
 
     const handleChange = (newValue: T) => {
-      updateAgentChatConfig({ [configKey]: newValue });
+      updateAgentChatConfigById(agentId, { [configKey]: newValue });
     };
 
     return <LevelSliderInner defaultValue={dv} value={storeValue} onChange={handleChange} />;

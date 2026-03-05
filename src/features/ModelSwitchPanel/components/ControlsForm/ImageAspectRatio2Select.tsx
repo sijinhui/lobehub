@@ -1,8 +1,6 @@
 import { Select } from 'antd';
 import { memo, useMemo } from 'react';
 
-import { useAgentId } from '@/features/ChatInput/hooks/useAgentId';
-import { useUpdateAgentConfig } from '@/features/ChatInput/hooks/useUpdateAgentConfig';
 import { useAgentStore } from '@/store/agent';
 import { chatConfigByIdSelectors } from '@/store/agent/selectors';
 
@@ -58,14 +56,14 @@ const ImageAspectRatio2SelectInner = memo<{
 // Store-connected component - uses agent store hooks
 const ImageAspectRatio2SelectWithStore = memo<{ defaultValue: AspectRatio2 }>(
   ({ defaultValue }) => {
-    const agentId = useAgentId();
-    const { updateAgentChatConfig } = useUpdateAgentConfig();
+    const agentId = useAgentStore((s) => s.activeAgentId) || '';
+    const updateAgentChatConfigById = useAgentStore((s) => s.updateAgentChatConfigById);
     const config = useAgentStore((s) => chatConfigByIdSelectors.getChatConfigById(agentId)(s));
 
     const storeValue = (config.imageAspectRatio2 as AspectRatio2) || defaultValue;
 
     const handleChange = (ratio: AspectRatio2) => {
-      updateAgentChatConfig({ imageAspectRatio2: ratio });
+      updateAgentChatConfigById(agentId, { imageAspectRatio2: ratio });
     };
 
     return <ImageAspectRatio2SelectInner value={storeValue} onChange={handleChange} />;
