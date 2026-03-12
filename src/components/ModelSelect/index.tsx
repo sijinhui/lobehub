@@ -261,6 +261,7 @@ export const ModelInfoTags = memo<ModelInfoTagsProps>(
 interface ModelItemRenderProps extends ChatModelCard, Partial<Omit<FlexboxProps, 'id' | 'title'>> {
   abilities?: ModelAbilities;
   newBadgeLabel?: string;
+  proBadgeLabel?: string;
   showInfoTag?: boolean;
 }
 
@@ -275,6 +276,7 @@ export const ModelItemRender = memo<ModelItemRenderProps>(
     hot,
     imageOutput,
     newBadgeLabel,
+    proBadgeLabel,
     video,
     vision,
     id,
@@ -319,6 +321,11 @@ export const ModelItemRender = memo<ModelItemRenderProps>(
             <NewModelBadgeCore label={newBadgeLabel} releasedAt={releasedAt} />
           ) : (
             <NewModelBadgeI18n releasedAt={releasedAt} />
+          )}
+          {proBadgeLabel && (
+            <Tag color="gold" size="small">
+              {proBadgeLabel}
+            </Tag>
           )}
         </Flexbox>
         {showInfoTag && (
