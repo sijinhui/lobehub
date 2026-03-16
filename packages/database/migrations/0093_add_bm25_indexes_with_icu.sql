@@ -3,8 +3,16 @@
 -- Enum/filter fields (type, status, role, etc.) use keyword+fast for the same reason.
 -- Large tables (documents, messages) are placed last to avoid blocking smaller index builds.
 
+-- Check if pg_search extension is available before creating BM25 indexes
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_search') THEN
+    RAISE NOTICE 'pg_search extension not found. Skipping BM25 index creation. Install ParadeDB to enable full-text search.';
+    RETURN;
+  END IF;
+
 -- 1. agents: title, description, slug, tags(jsonb), system_role, user_id
-DROP INDEX IF EXISTS agents_bm25_idx;--> statement-breakpoint
+DROP INDEX IF EXISTS agents_bm25_idx;
 CREATE INDEX agents_bm25_idx ON agents
 USING bm25 (id, title, description, slug, tags, system_role, user_id)
 WITH (
@@ -212,3 +220,6 @@ WITH (
     "role":    {"fast": true, "tokenizer": {"type": "keyword"}}
   }'
 );
+
+END;
+$$;

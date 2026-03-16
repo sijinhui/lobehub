@@ -11,6 +11,36 @@ Guidelines for using Claude Code in this LobeHub repository.
 - SWR for data fetching; TRPC for type-safe backend
 - Drizzle ORM with PostgreSQL; Vitest for testing
 
+## Database
+
+### PostgreSQL Extensions
+
+The project uses standard PostgreSQL by default. For enhanced full-text search capabilities, you can optionally use ParadeDB.
+
+**Current setup (standard PostgreSQL):**
+- BM25 full-text search indexes are automatically skipped if `pg_search` extension is unavailable
+- Basic search functionality works using standard SQL `ILIKE` queries
+- No additional setup required
+
+**Optional: ParadeDB for enhanced search (production recommended):**
+
+To enable BM25 full-text search with better performance:
+
+```yaml
+# docker-compose.yml
+services:
+  postgres:
+    image: paradedb/paradedb:latest
+    # or specify version: paradedb/paradedb:0.10.0
+```
+
+ParadeDB provides:
+- BM25 full-text search indexes with ICU tokenization
+- Better search relevance and performance
+- Automatic stemming and stopword handling
+
+The database migrations will automatically detect and use `pg_search` extension when available.
+
 ## Project Structure
 
 ```
