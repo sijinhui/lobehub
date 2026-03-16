@@ -56,25 +56,5 @@ services:
 #    volumes:
 #      - /var/run/docker.sock:/var/run/docker.sock
 
-#  postgresql:
-#    image: pgvector/pgvector:pg17
-#    container_name: lobe-postgres
-#    ports:
-#      - '5432:5432'
-#    volumes:
-#      - 'postgresql_data:/var/lib/postgresql/data'
-#    environment:
-#      - 'POSTGRES_DB=${LOBE_DB_NAME}'
-#      - 'POSTGRES_PASSWORD=${POSTGRES_PASSWORD}'
-#    healthcheck:
-#      test: ['CMD-SHELL', 'pg_isready -U postgres']
-#      interval: 5s
-#      timeout: 5s
-#      retries: 5
-#    restart: always
-#
-#volumes:
-#  postgresql_data: {}
-
 #networks:
 #  lobe-chat: {}

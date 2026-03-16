@@ -1,25 +1,26 @@
 
 services:
   postgresql:
-    image: paradedb/paradedb:latest-pg17
+    image: registry.cn-hangzhou.aliyuncs.com/sijinhui/paradedb:latest-pg17
     container_name: lobe-postgres
     # Optional: Remove or change these ports if:
     # - You don't need external database access
     # - The ports conflict with other services on your host
-    network_mode: 'host'
-    # ports:
-    #   - '5432:5432'
+    #network_mode: 'host'
+    ports:
+      - '5432:5432'
     volumes:
-      - '/mnt/data/postgresql/postgresql_data:/var/lib/postgresql/data'
+      - 'postgresql_data:/var/lib/postgresql/data'
     environment:
       - 'POSTGRES_DB=${LOBE_DB_NAME}'
+      - 'POSTGRES_USER=${LOBE_DB_NAME}'
       - 'POSTGRES_PASSWORD=${POSTGRES_PASSWORD}'
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      test: ['CMD-SHELL', 'pg_isready -U lobechat']
       interval: 5s
       timeout: 5s
       retries: 5
     restart: always
 
-#volumes:
-#  postgresql_data: {}
+volumes:
+  postgresql_data: {}
