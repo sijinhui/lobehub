@@ -43,7 +43,7 @@ The database migrations will automatically detect and use `pg_search` extension 
 
 ## Project Structure
 
-```
+```plaintext
 lobehub/
 ├── apps/desktop/           # Electron desktop app
 ├── packages/               # Shared packages (@lobechat/*)
@@ -107,7 +107,7 @@ bun run dev
 
 After `dev:spa` starts, the terminal prints a **Debug Proxy** URL:
 
-```
+```plaintext
 Debug Proxy: https://app.lobehub.com/_dangerous_local_dev_proxy?debug-host=http%3A%2F%2Flocalhost%3A9876
 ```
 
@@ -146,20 +146,6 @@ cd packages/database && bunx vitest run --silent='passed-only' '[file]'
 - Add keys to `src/locales/default/namespace.ts`
 - For dev preview: translate `locales/zh-CN/` and `locales/en-US/`
 - Don't run `pnpm i18n` - CI handles it
-
-## Linear Issue Management
-
-**Trigger conditions** - when ANY of these occur, apply Linear workflow:
-
-- User mentions issue ID like `LOBE-XXX`
-- User says "linear", "link linear", "linear issue"
-- Creating PR that references a Linear issue
-
-**Workflow:**
-
-1. Use `ToolSearch` to confirm `linear-server` MCP exists (search `linear` or `mcp__linear-server__`)
-2. If found, read `.agents/skills/linear/SKILL.md` and follow the workflow
-3. If not found, skip Linear integration (treat as not installed)
 
 ## Skills (Auto-loaded by Claude)
 
