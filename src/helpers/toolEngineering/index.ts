@@ -1,6 +1,7 @@
 /**
  * Tools Engineering - Unified tools processing using ToolsEngine
  */
+import { SkillsIdentifier } from '@lobechat/builtin-tool-skills';
 import { CloudSandboxManifest } from '@lobechat/builtin-tool-cloud-sandbox';
 import { KnowledgeBaseManifest } from '@lobechat/builtin-tool-knowledge-base';
 import { LocalSystemManifest } from '@lobechat/builtin-tool-local-system';
@@ -37,13 +38,15 @@ export interface ToolsEngineConfig {
   defaultToolIds?: string[];
   /** Custom enable checker for plugins */
   enableChecker?: PluginEnableChecker;
+  /** Transform manifests before passing to ToolsEngine (e.g., to remove sandbox-dependent APIs) */
+  manifestTransform?: (manifests: LobeChatPluginManifest[]) => LobeChatPluginManifest[];
 }
 
 /**
  * Initialize ToolsEngine with current manifest schemas and configurable options
  */
 export const createToolsEngine = (config: ToolsEngineConfig = {}): ToolsEngine => {
-  const { enableChecker, additionalManifests = [], defaultToolIds } = config;
+  const { enableChecker, additionalManifests = [], defaultToolIds, manifestTransform } = config;
 
   const toolStoreState = getToolStoreState();
 
@@ -76,11 +79,14 @@ export const createToolsEngine = (config: ToolsEngineConfig = {}): ToolsEngine =
     ...additionalManifests,
   ];
 
+  // Apply manifest transform if provided (e.g., to remove sandbox-dependent APIs)
+  const finalManifests = manifestTransform ? manifestTransform(allManifests) : allManifests;
+
   return new ToolsEngine({
     defaultToolIds,
     enableChecker,
     functionCallChecker: isCanUseFC,
-    manifestSchemas: allManifests,
+    manifestSchemas: finalManifests,
   });
 };
 
@@ -92,6 +98,21 @@ export const createAgentToolsEngine = (
   const searchConfig = getSearchConfig(workingModel.model, workingModel.provider);
   const agentState = getAgentStoreState();
   const userPlugins = agentSelectors.currentAgentPlugins(agentState);
+
+  const isCloudSandboxEnabled = agentChatConfigSelectors.isCloudSandboxEnabled(agentState);
+
+  // When cloud sandbox is disabled, strip sandbox-dependent APIs from lobe-skills
+  const SANDBOX_DEPENDENT_APIS = new Set(['runCommand', 'execScript', 'exportFile']);
+  const manifestTransform = !isCloudSandboxEnabled
+    ? (manifests: LobeChatPluginManifest[]) =>
+        manifests.map((m) => {
+          if (m.identifier !== SkillsIdentifier) return m;
+          return {
+            ...m,
+            api: m.api.filter((api) => !SANDBOX_DEPENDENT_APIS.has(api.name)),
+          };
+        })
+    : undefined;
 
   return createToolsEngine({
     defaultToolIds,
@@ -130,6 +151,7 @@ export const createAgentToolsEngine = (
         [WebBrowsingManifest.identifier]: searchConfig.useApplicationBuiltinSearchTool,
       },
     }),
+    manifestTransform,
   });
 };
 

@@ -3,6 +3,7 @@ import { AgentManagementIdentifier } from '@lobechat/builtin-tool-agent-manageme
 import { GroupAgentBuilderIdentifier } from '@lobechat/builtin-tool-group-agent-builder';
 import { GTDIdentifier } from '@lobechat/builtin-tool-gtd';
 import { LobeToolIdentifier } from '@lobechat/builtin-tool-tools';
+import { defaultToolIds } from '@lobechat/builtin-tools';
 import { isDesktop, KLAVIS_SERVER_TYPES, LOBEHUB_SKILL_PROVIDERS } from '@lobechat/const';
 import type {
   AgentBuilderContext,
@@ -438,9 +439,18 @@ export const contextEngineering = async ({
   let toolDiscoveryConfig: ToolDiscoveryConfig | undefined;
   if (isLobeToolsEnabled) {
     const toolState = getToolStoreState();
+
+    // Build a set of tools that are in defaultToolIds but not enabled
+    // These were explicitly disabled by system-level rules (e.g., sandbox off)
+    // and should not appear in <available_tools> for discovery
+    const disabledDefaultTools = new Set(
+      defaultToolIds.filter((id) => !enabledToolSet.has(id)),
+    );
+
     const availableTools = toolSelectors
       .availableToolsForDiscovery(toolState)
-      .filter((tool) => !enabledToolSet.has(tool.identifier));
+      .filter((tool) => !enabledToolSet.has(tool.identifier))
+      .filter((tool) => !disabledDefaultTools.has(tool.identifier));
 
     if (availableTools.length > 0) {
       toolDiscoveryConfig = { availableTools };
