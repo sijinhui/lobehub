@@ -1,7 +1,7 @@
 import { isDesktop } from '@lobechat/const';
 import { Avatar } from '@lobehub/ui';
+import { SkillsIcon } from '@lobehub/ui/icons';
 import {
-  Blocks,
   Brain,
   BrainCircuit,
   ChartColumnBigIcon,
@@ -14,6 +14,7 @@ import {
   Info,
   KeyboardIcon,
   KeyIcon,
+  KeyRound,
   Map,
   PaletteIcon,
   Sparkles,
@@ -137,7 +138,7 @@ export const useCategory = () => {
         label: t('tab.serviceModel'),
       },
       {
-        icon: Blocks,
+        icon: SkillsIcon,
         key: SettingsTabs.Skill,
         label: t('tab.skill'),
       },
@@ -145,6 +146,11 @@ export const useCategory = () => {
         icon: BrainCircuit,
         key: SettingsTabs.Memory,
         label: t('tab.memory'),
+      },
+      {
+        icon: KeyRound,
+        key: SettingsTabs.Creds,
+        label: t('tab.creds'),
       },
       showApiKeyManage && {
         icon: KeyIcon,
