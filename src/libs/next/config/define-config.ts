@@ -368,12 +368,18 @@ export function defineConfig(config: CustomNextConfig) {
 
     transpilePackages: ['mermaid', 'better-auth-harmony'],
     turbopack: {
-      rules: isTest
-        ? void 0
-        : codeInspectorPlugin({
-            bundler: 'turbopack',
-            hotKeys: ['altKey', 'ctrlKey'],
-          }),
+      rules: {
+        ...(isTest
+          ? void 0
+          : codeInspectorPlugin({
+              bundler: 'turbopack',
+              hotKeys: ['altKey', 'ctrlKey'],
+            })),
+        '*.md': {
+          as: '*.js',
+          loaders: ['raw-loader'],
+        },
+      },
       ...config.turbopack,
     },
 
