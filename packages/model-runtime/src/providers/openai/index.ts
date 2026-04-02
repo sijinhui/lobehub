@@ -28,7 +28,7 @@ export const params = {
   baseURL: 'https://api.openai.com/v1',
   chatCompletion: {
     handlePayload: (payload) => {
-      const { enabledSearch, model, ...rest } = payload;
+      const { enabledSearch, model, presence_penalty: _, ...rest } = payload;
 
       if (responsesAPIModels.has(model) || enabledSearch) {
         return { ...rest, apiMode: 'responses', enabledSearch, model } as ChatStreamPayload;
@@ -43,7 +43,6 @@ export const params = {
           ...rest,
           frequency_penalty: undefined,
           model,
-          presence_penalty: undefined,
           stream: payload.stream ?? true,
           temperature: undefined,
           top_p: undefined,
