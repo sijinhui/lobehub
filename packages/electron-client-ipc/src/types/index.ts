@@ -1,5 +1,6 @@
 export * from './dataSync';
 export * from './git';
+export * from './heterogeneousAgent';
 export * from './localSystem';
 export * from './mcpInstall';
 export * from './notification';
@@ -13,5 +14,4 @@ export * from './toolDetector';
 export * from './topicPopup';
 export * from './tray';
 export * from './update';
-export * from './upload';
 export * from './window';

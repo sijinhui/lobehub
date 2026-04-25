@@ -10,7 +10,7 @@ import { createPathScopeAudit } from '@lobechat/builtin-tool-local-system';
 import { PageAgentIdentifier } from '@lobechat/builtin-tool-page-agent';
 import { manualModeExcludeToolIds } from '@lobechat/builtin-tools';
 import { isDesktop } from '@lobechat/const';
-import { generateToolsFromManifest, type ToolsEngine } from '@lobechat/context-engine';
+import { type ToolsEngine } from '@lobechat/context-engine';
 import { buildTaskDetailPrompt, buildTaskListPrompt } from '@lobechat/prompts';
 import {
   type ConversationContext,
@@ -22,13 +22,14 @@ import { t } from 'i18next';
 
 import { createAgentToolsEngine } from '@/helpers/toolEngineering';
 import { type ResolvedAgentConfig } from '@/services/chat/mecha';
-import { resolveAgentConfig } from '@/services/chat/mecha';
+import { composeEnabledTools, resolveAgentConfig } from '@/services/chat/mecha';
 import { localFileService } from '@/services/electron/localFileService';
 import { messageService } from '@/services/message';
 import { getAgentStoreState } from '@/store/agent';
 import { agentSelectors } from '@/store/agent/selectors';
 import { createAgentExecutors } from '@/store/chat/agents/createAgentExecutors';
 import { type ChatStore, useChatStore } from '@/store/chat/store';
+import { notifyDesktopHumanApprovalRequired } from '@/store/chat/utils/desktopNotification';
 import { getTaskStoreState } from '@/store/task';
 import { pageAgentRuntime } from '@/store/tool/slices/builtin/executors/lobe-page-agent';
 import { type StoreSetter } from '@/store/types';
@@ -200,23 +201,14 @@ export class StreamingExecutorActionImpl {
       toolIds: mergedToolIds,
     });
 
-    // --- Merge injected manifests (generic, caller-driven) ---
-    const injectedManifests = initialContext?.initialContext?.injectedManifests;
-    const existingIdSet = new Set(toolsDetailed.enabledToolIds);
-    // Skip manifests whose identifier is already enabled (dedup)
-    const newInjected = injectedManifests?.filter((m) => !existingIdSet.has(m.identifier)) ?? [];
-
-    const enabledToolIds = [
-      ...toolsDetailed.enabledToolIds,
-      ...newInjected.map((m) => m.identifier),
-    ];
-    const enabledManifests = [...toolsDetailed.enabledManifests, ...newInjected];
-    const injectedTools = newInjected.flatMap((m) => generateToolsFromManifest(m));
-    const tools = toolsDetailed.tools
-      ? [...toolsDetailed.tools, ...injectedTools]
-      : injectedTools.length > 0
-        ? injectedTools
-        : undefined;
+    const { enabledToolIds, enabledManifests, tools } = composeEnabledTools({
+      context: {
+        isPageEditorReady: pageAgentRuntime.isReady(),
+        scope,
+      },
+      injectedManifests: initialContext?.initialContext?.injectedManifests,
+      toolsDetailed,
+    });
 
     // Use enabledManifests directly to avoid getEnabledPluginManifests adding default tools again
     const toolManifestMap = Object.fromEntries(
@@ -285,7 +277,7 @@ export class StreamingExecutorActionImpl {
     // Build initialContext for page editor if lobe-page-agent is enabled
     let runtimeInitialContext: RuntimeInitialContext | undefined;
 
-    if (enabledToolIds.includes(PageAgentIdentifier)) {
+    if (scope === 'page' && enabledToolIds.includes(PageAgentIdentifier)) {
       try {
         // Get page content context from page agent runtime
         const pageContentContext = pageAgentRuntime.getPageContentContext('both');
@@ -568,7 +560,9 @@ export class StreamingExecutorActionImpl {
       // Use selectTodosFromMessages selector (shared with UI display)
       const todos = selectTodosFromMessages(currentDBMessages);
       // Accumulate activated tool IDs from lobe-activator messages
-      const activatedToolIds = selectActivatedToolIdsFromMessages(currentDBMessages);
+      const activatedToolIds = selectActivatedToolIdsFromMessages(currentDBMessages)?.filter(
+        (id) => scope === 'page' || id !== PageAgentIdentifier,
+      );
       // Accumulate activated skills from activateSkill messages
       const activatedSkills = selectActivatedSkillsFromMessages(currentDBMessages);
       const hasQueuedMessages = (this.#get().queuedMessages[contextKey]?.length ?? 0) > 0;
@@ -580,7 +574,7 @@ export class StreamingExecutorActionImpl {
       });
 
       // If page agent is enabled, get the latest XML for stepPageEditor
-      if (nextContext.initialContext?.pageEditor) {
+      if (scope === 'page' && nextContext.initialContext?.pageEditor) {
         try {
           const pageContentContext = pageAgentRuntime.getPageContentContext('xml');
           stepContext.stepPageEditor = {
@@ -634,6 +628,15 @@ export class StreamingExecutorActionImpl {
         switch (event.type) {
           case 'done': {
             log('[internal_execAgentRuntime] Received done event');
+            break;
+          }
+
+          case 'human_approve_required': {
+            await notifyDesktopHumanApprovalRequired(this.#get, {
+              agentId,
+              groupId,
+              topicId,
+            });
             break;
           }
 
