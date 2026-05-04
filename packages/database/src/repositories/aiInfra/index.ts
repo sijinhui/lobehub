@@ -197,12 +197,30 @@ export class AiInfraRepos {
     ]);
     const enabledProviders = providers.filter((item) => (filterEnabled ? item.enabled : true));
 
+    // Providers whose model list is explicitly controlled via server env var (e.g. OPENAI_MODEL_LIST).
+    // For these providers the server config is the source of truth — user DB records are ignored so
+    // that UI "fetch models" or manual edits cannot override the admin-configured list.
+    const serverControlledProviders = new Set(
+      Object.entries(this.providerConfigs)
+        .filter(([, config]) => config.serverModelLists)
+        .map(([id]) => id),
+    );
+
     const builtinModelList = await pMap(
       enabledProviders,
       async (provider) => {
         const aiModels = await this.fetchBuiltinModels(provider.id);
         return (aiModels || [])
           .map<EnabledAiModel & { enabled?: boolean | null }>((item) => {
+            // When the provider's model list is server-controlled, skip user DB overrides entirely
+            // so the env var config is always authoritative.
+            if (serverControlledProviders.has(provider.id))
+              return injectSearchSettings(provider.id, {
+                ...item,
+                abilities: item.abilities || {},
+                providerId: provider.id,
+              });
+
             const user = allModels.find((m) => m.id === item.id && m.providerId === provider.id);
 
             // User hasn't modified local model
@@ -229,7 +247,10 @@ export class AiInfraRepos {
                 ? item.settings
                 : merge(item.settings || {}, user.settings || {}),
               sort: user.sort ?? undefined,
-              type: user.type || item.type,
+              // type must come from builtin config — remote-fetched models default to 'chat'
+              // and can corrupt image/video model types when saved to DB (mirrors the fix in
+              // getAiProviderModelList).
+              type: item.type || user.type,
             };
             return injectSearchSettings(provider.id, mergedModel); // User modified local model, check search settings
           })
@@ -244,10 +265,12 @@ export class AiInfraRepos {
     const enabledProviderIds = new Set(enabledProviders.map((item) => item.id));
     // User database models, check search settings
     // Exclude models already handled in builtinModelList to avoid duplicates
+    // Also exclude models from server-controlled providers — their list is fixed by env var.
     const appendedUserModels = allModels
       .filter((item) => {
         if (item.providerId === BRANDING_PROVIDER) return false;
         if (builtinModelKeys.has(`${item.providerId}:${item.id}`)) return false;
+        if (serverControlledProviders.has(item.providerId)) return false;
         return filterEnabled ? enabledProviderIds.has(item.providerId) && item.enabled : true;
       })
       .map((item) => injectSearchSettings(item.providerId, item));
