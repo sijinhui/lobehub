@@ -172,10 +172,12 @@ export class TaskLifecycleService {
 
       await this.briefModel.create({
         actions: DEFAULT_BRIEF_ACTIONS['error'],
+        agentId: currentTask?.assigneeAgentId || undefined,
         priority: 'urgent',
         summary: `Execution failed: ${errorMessage || 'Unknown error'}`,
         taskId,
         title: `${taskIdentifier} topic${topicRef} error`,
+        trigger: 'task',
         type: 'error',
       });
 
@@ -284,12 +286,14 @@ export class TaskLifecycleService {
     currentTask: any,
   ): Promise<void> {
     try {
-      const { model, provider } = await (this.systemAgentService as any).getTaskModelConfig(
-        'topic',
-      );
+      const [{ model, provider }, responseLanguage] = await Promise.all([
+        (this.systemAgentService as any).getTaskModelConfig('topic'),
+        this.systemAgentService.getUserLocale(),
+      ]);
 
       const payload = chainTaskTopicHandoff({
         lastAssistantContent,
+        responseLanguage,
         taskInstruction: currentTask?.instruction || '',
         taskName: currentTask?.name || taskIdentifier,
       });
@@ -377,9 +381,10 @@ export class TaskLifecycleService {
       const artifacts: BriefArtifacts = { documents: pinnedDocs };
       const handoff = (topicLink?.handoff as TaskTopicHandoff | null) ?? null;
 
-      const { model, provider } = await (this.systemAgentService as any).getTaskModelConfig(
-        'topic',
-      );
+      const [{ model, provider }, responseLanguage] = await Promise.all([
+        (this.systemAgentService as any).getTaskModelConfig('topic'),
+        this.systemAgentService.getUserLocale(),
+      ]);
 
       let decision: BriefDecision;
       if (ruleVerdict.emit === 'unknown') {
@@ -441,6 +446,7 @@ export class TaskLifecycleService {
         artifacts,
         handoff,
         lastAssistantContent,
+        responseLanguage,
         taskInstruction: currentTask.instruction || '',
         taskName: currentTask.name || taskIdentifier,
       });
@@ -471,12 +477,14 @@ export class TaskLifecycleService {
 
       await this.briefModel.create({
         actions,
+        agentId: currentTask.assigneeAgentId || undefined,
         artifacts,
         priority,
         summary: generated.summary,
         taskId,
         title: generated.title,
         topicId,
+        trigger: 'task',
         type: briefType,
       });
 
@@ -542,6 +550,7 @@ export class TaskLifecycleService {
         // (no actionable buttons in the UI) and the task transitions to 'completed'.
         const now = new Date();
         await this.briefModel.create({
+          agentId: currentTask?.assigneeAgentId || undefined,
           priority: 'info',
           resolvedAction: 'auto-judge-pass',
           resolvedAt: now,
@@ -549,6 +558,7 @@ export class TaskLifecycleService {
           summary: `Review passed (score: ${reviewResult.overallScore}%, iteration: ${iteration}). ${content.slice(0, 150)}`,
           taskId,
           title: `${taskIdentifier} review passed`,
+          trigger: 'task',
           type: 'result',
         });
         await this.taskModel.updateStatus(taskId, 'completed', { error: null });
@@ -558,10 +568,12 @@ export class TaskLifecycleService {
 
       if (reviewConfig.autoRetry && iteration < reviewConfig.maxIterations) {
         await this.briefModel.create({
+          agentId: currentTask?.assigneeAgentId || undefined,
           priority: 'normal',
           summary: `Review failed (score: ${reviewResult.overallScore}%, iteration ${iteration}/${reviewConfig.maxIterations}). Auto-retrying...`,
           taskId,
           title: `${taskIdentifier} review failed, retrying`,
+          trigger: 'task',
           type: 'insight',
         });
 
@@ -575,10 +587,12 @@ export class TaskLifecycleService {
       // accept signal (force-pass) by BriefService.resolve. Result briefs render
       // a fixed single-button UI, so no custom actions are persisted.
       await this.briefModel.create({
+        agentId: currentTask?.assigneeAgentId || undefined,
         priority: 'urgent',
         summary: `Review failed after ${iteration} iteration(s) (score: ${reviewResult.overallScore}%). Suggestions: ${reviewResult.suggestions?.join('; ') || 'none'}`,
         taskId,
         title: `${taskIdentifier} review failed — needs attention`,
+        trigger: 'task',
         type: 'result',
       });
       await this.taskModel.updateStatus(taskId, 'paused', { error: null });

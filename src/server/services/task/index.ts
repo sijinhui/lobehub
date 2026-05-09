@@ -195,8 +195,8 @@ export class TaskService {
     const [authorMap, enrichedBriefs] = await Promise.all([
       this.resolveAuthors(agentIds, userIds),
       this.briefService
-        .enrichBriefsWithAgents(briefs)
-        .catch(() => briefs.map((b) => ({ ...b, agents: [] }))),
+        .enrichBriefAgentOnly(briefs)
+        .catch(() => briefs.map((b) => ({ ...b, agent: null }))),
     ]);
 
     const creatorId = task.createdByAgentId ?? task.createdByUserId;
@@ -229,8 +229,8 @@ export class TaskService {
       }),
       ...enrichedBriefs.map((b) => ({
         actions: b.actions ?? undefined,
+        agent: b.agent,
         agentId: b.agentId,
-        agents: b.agents,
         artifacts: b.artifacts ?? undefined,
         author: b.agentId ? authorMap.get(b.agentId) : undefined,
         briefType: b.type,

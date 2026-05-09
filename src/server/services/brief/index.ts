@@ -13,7 +13,10 @@ export interface AgentAvatarInfo {
   title: string | null;
 }
 
-export type BriefWithAgents = BriefItem & {
+export type BriefWithAgent = BriefItem & {
+  /** Avatar of the agent that produced this brief; `null` when the brief has no `agentId` or the agent has been deleted. */
+  agent: AgentAvatarInfo | null;
+  /** Agents related to this brief, ordered with the direct producing agent before task-tree agents. */
   agents: AgentAvatarInfo[];
   /** Parent task's runtime status — `scheduled` marks a task parked between automated runs. */
   taskStatus: TaskStatus | null;
@@ -34,36 +37,101 @@ export class BriefService {
     this.taskModel = new TaskModel(db, userId);
   }
 
-  async enrichBriefsWithAgents(briefs: BriefItem[]): Promise<BriefWithAgents[]> {
-    const taskIds = briefs.map((b) => b.taskId).filter((id): id is string => id !== null);
-
-    if (taskIds.length === 0) {
-      return briefs.map((brief) => ({ ...brief, agents: [], taskStatus: null }));
+  /**
+   * Lightweight enrich for callers that only need the direct producing agent
+   * (e.g. task detail, where the surrounding payload already covers task tree
+   * + status). Skips the recursive task-tree CTE and `taskFindByIds` round
+   * trip used by {@link enrichBriefsWithAgents}.
+   */
+  async enrichBriefAgentOnly(
+    briefs: BriefItem[],
+  ): Promise<(BriefItem & { agent: AgentAvatarInfo | null })[]> {
+    const directAgentIds = [
+      ...new Set(briefs.map((b) => b.agentId).filter((id): id is string => !!id)),
+    ];
+    if (directAgentIds.length === 0) {
+      return briefs.map((brief) => ({ ...brief, agent: null }));
     }
 
-    const [taskAgentIdsMap, taskRows] = await Promise.all([
-      this.taskModel.getTreeAgentIdsForTaskIds(taskIds),
-      this.taskModel.findByIds(taskIds),
-    ]);
-    const taskStatusMap = Object.fromEntries(
-      taskRows.map((t) => [t.id, (t.status as TaskStatus) ?? null]),
+    const agentList = await this.agentModel.getAgentAvatarsByIds(directAgentIds);
+    const agentMap: Record<string, AgentAvatarInfo> = Object.fromEntries(
+      agentList.map((a) => [a.id, a]),
     );
-
-    const allAgentIds = [...new Set(Object.values(taskAgentIdsMap).flat())];
-    let agentMap: Record<string, AgentAvatarInfo> = {};
-
-    if (allAgentIds.length > 0) {
-      const agentList = await this.agentModel.getAgentAvatarsByIds(allAgentIds);
-      agentMap = Object.fromEntries(agentList.map((a) => [a.id, a]));
-    }
 
     return briefs.map((brief) => ({
       ...brief,
-      agents: (brief.taskId ? taskAgentIdsMap[brief.taskId] || [] : [])
-        .map((id) => agentMap[id])
-        .filter(Boolean),
-      taskStatus: brief.taskId ? (taskStatusMap[brief.taskId] ?? null) : null,
+      agent: brief.agentId ? (agentMap[brief.agentId] ?? null) : null,
     }));
+  }
+
+  /**
+   * Enrich briefs with the producing agent + parent task status (always),
+   * plus optionally the full task-tree agent roster (`agents[]`).
+   *
+   * `includeTreeAgents` defaults to `false` because no current consumer
+   * renders `brief.agents[]` — `BriefCard` only uses `brief.agent`. Skipping
+   * the recursive task-tree CTE turns the previous waterfall (CTE, then
+   * `getAgentAvatars` once tree ids are known) into two truly parallel SQLs
+   * (`taskFindByIds` + `getAgentAvatars` over direct agents only). Pass
+   * `true` if a future caller actually needs the tree roster.
+   */
+  async enrichBriefsWithAgents(
+    briefs: BriefItem[],
+    options: { includeTreeAgents?: boolean } = {},
+  ): Promise<BriefWithAgent[]> {
+    const { includeTreeAgents = false } = options;
+    const taskIds = [...new Set(briefs.map((b) => b.taskId).filter((id): id is string => !!id))];
+    const directAgentIds = [
+      ...new Set(briefs.map((b) => b.agentId).filter((id): id is string => !!id)),
+    ];
+    if (taskIds.length === 0 && directAgentIds.length === 0) {
+      return briefs.map((brief) => ({ ...brief, agent: null, agents: [], taskStatus: null }));
+    }
+
+    const treeAgentIdsByTaskId =
+      includeTreeAgents && taskIds.length > 0
+        ? await this.taskModel.getTreeAgentIdsForTaskIds(taskIds)
+        : ({} as Record<string, string[]>);
+    const allAgentIds = [
+      ...new Set([...directAgentIds, ...Object.values(treeAgentIdsByTaskId).flat()]),
+    ];
+
+    const [taskRows, agentList] = await Promise.all([
+      taskIds.length > 0 ? this.taskModel.findByIds(taskIds) : Promise.resolve([]),
+      allAgentIds.length > 0
+        ? this.agentModel.getAgentAvatarsByIds(allAgentIds)
+        : Promise.resolve([]),
+    ]);
+
+    const taskStatusMap = Object.fromEntries(
+      taskRows.map((t) => [t.id, (t.status as TaskStatus) ?? null]),
+    );
+    const agentMap: Record<string, AgentAvatarInfo> = Object.fromEntries(
+      agentList.map((a) => [a.id, a]),
+    );
+
+    return briefs.map((brief) => {
+      let agents: AgentAvatarInfo[] = [];
+      if (includeTreeAgents) {
+        const briefAgentIds = new Set<string>();
+        if (brief.agentId) briefAgentIds.add(brief.agentId);
+        if (brief.taskId) {
+          for (const agentId of treeAgentIdsByTaskId[brief.taskId] ?? []) {
+            briefAgentIds.add(agentId);
+          }
+        }
+        agents = [...briefAgentIds]
+          .map((agentId) => agentMap[agentId])
+          .filter((agent): agent is AgentAvatarInfo => Boolean(agent));
+      }
+
+      return {
+        ...brief,
+        agent: brief.agentId ? (agentMap[brief.agentId] ?? null) : null,
+        agents,
+        taskStatus: brief.taskId ? (taskStatusMap[brief.taskId] ?? null) : null,
+      };
+    });
   }
 
   async list(options?: { limit?: number; offset?: number; type?: string }) {
@@ -72,9 +140,28 @@ export class BriefService {
     return { briefs: data, total: result.total };
   }
 
-  async listUnresolved() {
-    const items = await this.briefModel.listUnresolved();
-    return this.enrichBriefsWithAgents(items);
+  /**
+   * Home Daily Brief feed. Uses the JOIN-based model query so the producing
+   * agent + parent task status come back in a single round trip — no
+   * separate enrichment pass.
+   */
+  async listUnresolved(): Promise<BriefWithAgent[]> {
+    const rows = await this.briefModel.listUnresolvedEnriched();
+    return rows.map(
+      ({ brief, agentRowId, agentAvatar, agentBackgroundColor, agentTitle, taskStatus }) => ({
+        ...brief,
+        agent: agentRowId
+          ? {
+              avatar: agentAvatar,
+              backgroundColor: agentBackgroundColor,
+              id: agentRowId,
+              title: agentTitle,
+            }
+          : null,
+        agents: [],
+        taskStatus: (taskStatus as TaskStatus) ?? null,
+      }),
+    );
   }
 
   /**
