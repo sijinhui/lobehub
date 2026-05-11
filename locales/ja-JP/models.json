@@ -408,7 +408,7 @@
   "deepseek-ai/deepseek-llm-67b-chat.description": "DeepSeek LLM Chat（67B）は、深い言語理解と対話能力を提供する革新的なモデルです。",
   "deepseek-ai/deepseek-v3.1-terminus.description": "DeepSeek V3.1 は次世代の推論モデルで、複雑な推論と連想思考に優れ、深い分析タスクに対応します。",
   "deepseek-ai/deepseek-v3.2.description": "DeepSeek V3.2は次世代推論モデルで、複雑な推論と連鎖的思考能力が強化されています。",
-  "deepseek-chat.description": "一般的な対話能力とコーディング能力を組み合わせた新しいオープンソースモデルです。チャットモデルの一般的な対話能力と、コーダーモデルの強力なコーディング能力を保持し、より良い嗜好調整を実現しています。DeepSeek-V2.5は、文章作成や指示の追従能力も向上しています。",
+  "deepseek-chat.description": "一般的な対話能力とコーディング能力を組み合わせた新しいオープンソースモデルです。チャットモデルの一般的な対話能力と、コーダーモデルの強力なコーディング能力を維持しながら、より良い嗜好調整を実現しています。DeepSeek-V2.5は、文章作成や指示の追従能力も向上しています。",
   "deepseek-coder-33B-instruct.description": "DeepSeek Coder 33B は 2T トークン（コード 87%、中英テキスト 13%）で学習されたコード言語モデルです。16K のコンテキストウィンドウと Fill-in-the-Middle タスクを導入し、プロジェクトレベルのコード補完とスニペット補完を提供します。",
   "deepseek-coder-v2.description": "DeepSeek Coder V2 はオープンソースの MoE コードモデルで、コーディングタスクにおいて GPT-4 Turbo に匹敵する性能を発揮します。",
   "deepseek-coder-v2:236b.description": "DeepSeek Coder V2 はオープンソースの MoE コードモデルで、コーディングタスクにおいて GPT-4 Turbo に匹敵する性能を発揮します。",
