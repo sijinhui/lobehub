@@ -8,8 +8,8 @@ import { PageAgentIdentifier } from '@lobechat/builtin-tool-page-agent';
 import type { DeviceAttachment } from '@lobechat/builtin-tool-remote-device';
 import { generateSystemPrompt, RemoteDeviceManifest } from '@lobechat/builtin-tool-remote-device';
 import {
-  injectSelfIterationIntentTool,
-  shouldExposeSelfIterationIntentTool,
+  injectSelfFeedbackIntentTool,
+  shouldExposeSelfFeedbackIntentTool,
 } from '@lobechat/builtin-tool-self-iteration';
 import { TaskIdentifier } from '@lobechat/builtin-tool-task';
 import { builtinTools, manualModeExcludeToolIds } from '@lobechat/builtin-tools';
@@ -76,6 +76,7 @@ import { MarketService } from '@/server/services/market';
 import { deviceProxy } from '@/server/services/toolExecution/deviceProxy';
 
 import { resolveDeviceAccessPolicy } from './deviceAccessPolicy';
+import { buildAllowedBuiltinTools, isDeviceToolIdentifier } from './deviceToolRegistry';
 import { ingestAttachment } from './ingestAttachment';
 
 const log = debug('lobe-server:ai-agent-service');
@@ -149,7 +150,7 @@ interface InternalExecAgentParams extends ExecAgentParams {
   /** Disable only local-system while preserving other tools. Useful for signal-only evals. */
   disableLocalSystem?: boolean;
   /** Disable the self-iteration declaration tool for reviewer/runtime paths. */
-  disableSelfIterationIntentTool?: boolean;
+  disableSelfFeedbackIntentTool?: boolean;
   /** Disable all tools (no plugins, no system manifests). Useful for eval/benchmark scenarios. */
   disableTools?: boolean;
   /** Discord context for injecting channel/guild info into agent system message */
@@ -1073,9 +1074,20 @@ export class AiAgentService {
       tools = toolsResult.tools;
       log('execAgent: enabled tool ids: %O', toolsResult.enabledToolIds);
 
+      // Single guard for every `toolManifestMap[id] = ...` ingest below.
+      // Mirrors the post-merge filter in `createServerToolsEngine`: an
+      // installed plugin, a LobeHub Skill, or a Klavis manifest declaring
+      // `identifier: 'lobe-remote-device'` would otherwise reach the
+      // activator-discovery map and let an external bot sender enable it
+      // (LOBE-8768). Centralising the check at the ingest layer means
+      // every future manifest source automatically inherits the wall.
+      const isManifestIngestAllowed = (identifier: string): boolean =>
+        canUseDevice || !isDeviceToolIdentifier(identifier);
+
       // Start with the scoped manifest map (pluginIds + defaultToolIds)
       const manifestMap = toolsEngine.getEnabledPluginManifests(pluginIds);
       manifestMap.forEach((manifest, id) => {
+        if (!isManifestIngestAllowed(id)) return;
         toolManifestMap[id] = manifest;
       });
 
@@ -1083,11 +1095,11 @@ export class AiAgentService {
       // so the activator can find their manifests when dynamically enabling them
       // (e.g., lobe-creds, lobe-cron). Exclude discoverable:false tools to prevent
       // internal infrastructure tools from being surfaced to the activator.
-      for (const tool of builtinTools) {
-        if (disableLocalSystem && tool.identifier === LocalSystemManifest.identifier) {
-          continue;
-        }
-
+      const allowedBuiltinTools = buildAllowedBuiltinTools({
+        canUseDevice,
+        disableLocalSystem,
+      });
+      for (const tool of allowedBuiltinTools) {
         if (tool.discoverable !== false && !toolManifestMap[tool.identifier]) {
           toolManifestMap[tool.identifier] = tool.manifest as LobeToolManifest;
         }
@@ -1095,20 +1107,24 @@ export class AiAgentService {
 
       // Include lobehub skill and klavis manifests for activator discovery
       for (const manifest of lobehubSkillManifests) {
+        if (!isManifestIngestAllowed(manifest.identifier)) continue;
         if (!toolManifestMap[manifest.identifier]) {
           toolManifestMap[manifest.identifier] = manifest;
         }
       }
       for (const manifest of klavisManifests) {
+        if (!isManifestIngestAllowed(manifest.identifier)) continue;
         if (!toolManifestMap[manifest.identifier]) {
           toolManifestMap[manifest.identifier] = manifest;
         }
       }
 
       for (const manifest of lobehubSkillManifests) {
+        if (!isManifestIngestAllowed(manifest.identifier)) continue;
         toolSourceMap[manifest.identifier] = 'lobehubSkill';
       }
       for (const manifest of klavisManifests) {
+        if (!isManifestIngestAllowed(manifest.identifier)) continue;
         toolSourceMap[manifest.identifier] = 'klavis';
       }
 
@@ -1157,23 +1173,23 @@ export class AiAgentService {
 
       const agentSelfIterationEnabled = agentConfig.chatConfig?.selfIteration?.enabled === true;
       const shouldCheckUserSelfIterationGate =
-        agentSelfIterationEnabled && !params.disableSelfIterationIntentTool;
+        agentSelfIterationEnabled && !params.disableSelfFeedbackIntentTool;
       if (
         shouldCheckUserSelfIterationGate &&
-        shouldExposeSelfIterationIntentTool({
+        shouldExposeSelfFeedbackIntentTool({
           agentSelfIterationEnabled,
-          disableSelfIterationIntentTool: params.disableSelfIterationIntentTool,
+          disableSelfFeedbackIntentTool: params.disableSelfFeedbackIntentTool,
           featureUserEnabled: await isAgentSignalEnabledForUser(this.db, this.userId),
         })
       ) {
         tools = tools ?? [];
-        injectSelfIterationIntentTool({
+        injectSelfFeedbackIntentTool({
           enabledToolIds: toolsResult.enabledToolIds,
           manifestMap: toolManifestMap,
           sourceMap: toolSourceMap,
           tools,
         });
-        log('execAgent: injected self-iteration intent declaration tool');
+        log('execAgent: injected self-feedback intent declaration tool');
       }
     }
 
