@@ -14,6 +14,7 @@ import type { SubagentEventContext, ToolCallPayload } from '@lobechat/heterogene
 import type {
   ChatMessageError,
   ChatToolPayload,
+  ChatTopicStatus,
   ConversationContext,
   HeterogeneousProviderConfig,
   MessageMapScope,
@@ -1054,6 +1055,7 @@ export const executeHeterogeneousAgent = async (
     messageError: ChatMessageError,
     options?: { clearContent?: boolean },
   ) => {
+    writeTopicStatus('failed');
     get().internal_toggleToolCallingStreaming(currentAssistantMessageId, undefined);
     get().completeOperation(operationId);
 
@@ -1175,6 +1177,10 @@ export const executeHeterogeneousAgent = async (
       workingDirectory: workingDirectory ?? '',
     });
   };
+  const writeTopicStatus = (status: ChatTopicStatus): void => {
+    if (!context.topicId) return;
+    void get().updateTopicStatus?.(context.topicId, status);
+  };
   const retryWithoutResume = (error: unknown): boolean => {
     if (
       resumeFallbackTriggered ||
@@ -1294,6 +1300,8 @@ export const executeHeterogeneousAgent = async (
     });
     agentSessionId = result.sessionId;
     if (!agentSessionId) throw new Error('Agent session returned no sessionId');
+
+    writeTopicStatus('running');
 
     // Register cancel hook on the operation — when the user hits Stop, the op
     // framework calls this; we SIGINT the CC process via the main-process IPC
@@ -1680,25 +1688,51 @@ export const executeHeterogeneousAgent = async (
         }
       }
 
-      // Subagent-tagged stream_chunks are persisted above via
-      // persistSubagent*Chunk into the in-thread assistant. The gateway
-      // handler is main-agent-only: forwarding would dispatch
-      // `updateMessage { tools }` onto `currentAssistantMessageId` (main),
-      // overwriting main.tools[] with subagent tools — main's own
-      // tool_use messages then lose their tools[] pairing and render
-      // as orphans until the next fetchAndReplaceMessages. Text /
-      // reasoning chunks similarly bleed subagent content into the
-      // main bubble. DB state is already correct (the subagent persist
-      // path writes to the thread scope), so dropping the forward
-      // keeps in-memory state aligned with DB.
-      if (event.type === 'stream_chunk' && (event.data as any)?.subagent) {
+      // ALL subagent-tagged events are handled inline (tool_result, line
+      // 1407) or routed through the per-spawn thread-scoped dispatcher
+      // (stream_chunk via persistSubagent*Chunk). They must NOT reach the
+      // main gateway handler, which is main-agent-only:
+      //   - `stream_chunk { tools_calling }` → handler dispatches
+      //     `updateMessage { tools }` onto `currentAssistantMessageId`
+      //     (main), overwriting main.tools[] with subagent tools. Main's
+      //     own tool_use messages then lose their tools[] pairing and
+      //     render as orphans until the next fetchAndReplaceMessages.
+      //   - `stream_chunk { text | reasoning }` → bleeds subagent content
+      //     into the main bubble.
+      //   - `tool_start` → fires `dispatchOnBeforeCall` against the MAIN
+      //     context for what is actually a subagent inner tool, leaking
+      //     renderer-side onBeforeCall hooks into the wrong scope.
+      //   - `tool_end`  → triggers `fetchAndReplaceMessages(main)` on
+      //     every subagent inner tool result. Wasted work, AND it widens
+      //     the in-memory ↔ DB drift window that surfaces as orphan
+      //     warnings even after the DB has settled (LOBE-8991).
+      // DB state is already correct (the subagent persist path writes to
+      // the thread scope), so dropping the forward keeps in-memory state
+      // aligned with DB.
+      if ((event.data as any)?.subagent) {
         return;
       }
 
       // Forward to the unified Gateway handler.
-      // If a step transition is pending, defer through persistQueue so the
-      // handler receives stream_start (with new assistant ID) FIRST.
-      if (pendingStepTransition) {
+      //
+      // Events that drive `fetchAndReplaceMessages` on the handler side
+      // (`tool_end`, `step_complete:execution_complete`, `stream_chunk` with a
+      // server-attached `toolMessageIds`) must wait for `persistQueue` to drain
+      // — otherwise the handler reads `assistant.tools[]` while a parallel
+      // `persistToolBatch` is still mid-flight and `replaceMessages` clobbers
+      // the in-memory cumulative tools[] with a shorter snapshot. That's the
+      // "7 → 6 次技能调用" rollback users see on parallel CC tool batches.
+      //
+      // Other forwards (text / reasoning / tools_calling dispatches) stay
+      // synchronous so live streaming UX isn't gated on DB round-trips.
+      const triggersFetchAndReplace =
+        event.type === 'tool_end' ||
+        (event.type === 'step_complete' &&
+          (event.data as { phase?: string } | undefined)?.phase === 'execution_complete') ||
+        (event.type === 'stream_chunk' &&
+          (event.data as { toolMessageIds?: unknown } | undefined)?.toolMessageIds !== undefined);
+
+      if (pendingStepTransition || triggersFetchAndReplace) {
         persistQueue = persistQueue.then(() => {
           eventHandler(event);
         });
@@ -1762,6 +1796,7 @@ export const executeHeterogeneousAgent = async (
             clearContent: shouldClearTerminalErrorContent,
           });
         } else {
+          writeTopicStatus('active');
           // NOW forward the deferred terminal event — handler will fetchAndReplaceMessages
           // and pick up the final persisted state.
           const terminal: AgentStreamEvent = deferredTerminalEvent ?? {
@@ -1822,7 +1857,10 @@ export const executeHeterogeneousAgent = async (
         // If the error came from a user-initiated cancel (SIGINT → non-zero
         // exit), don't surface it as a runtime error toast — the operation is
         // already marked cancelled and the partial content is persisted above.
-        if (isAborted()) return;
+        if (isAborted()) {
+          writeTopicStatus('active');
+          return;
+        }
 
         await persistTerminalError(messageError, { clearContent: shouldClearTerminalErrorContent });
       },
@@ -1910,7 +1948,10 @@ export const executeHeterogeneousAgent = async (
       completed = true;
       // `sendPrompt` rejects when the CLI exits non-zero, which is how SIGINT
       // lands here too. If the user cancelled, don't surface an error.
-      if (isAborted()) return;
+      if (isAborted()) {
+        writeTopicStatus('active');
+        return;
+      }
       const messageError = toHeterogeneousAgentMessageError(error, adapterType);
       await persistTerminalError(messageError, {
         clearContent: shouldSuppressTerminalErrorEcho(accumulatedContent, messageError),

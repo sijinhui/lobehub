@@ -29,7 +29,6 @@ import { memo, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useEnabledChatModels } from '@/hooks/useEnabledChatModels';
-import { aiModelSelectors, useAiInfraStore } from '@/store/aiInfra';
 import { useGlobalStore } from '@/store/global';
 import type { ModelDetailPanelExpandedKey } from '@/store/global/initialState';
 import { systemStatusSelectors } from '@/store/global/selectors';
@@ -42,8 +41,6 @@ import {
   getTextOutputUnitRate,
 } from '@/utils/index';
 
-import ControlsForm from './ControlsForm';
-
 const styles = createStaticStyles(({ css, cssVar }) => ({
   actionText: css`
     font-size: 14px;
@@ -52,21 +49,6 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
   `,
   container: css`
     padding-block-end: 8px;
-  `,
-  extraControls: css`
-    padding: 8px;
-
-    .ant-form-item:first-child {
-      padding-block: 0 4px;
-    }
-
-    .ant-form-item:last-child {
-      padding-block: 4px 0;
-    }
-
-    .ant-divider {
-      display: none;
-    }
   `,
   row: css`
     padding-block: 4px;
@@ -303,23 +285,19 @@ const ModelDetailPanel: FC<ModelDetailPanelProps> = memo(
       return providerData?.children.find((m) => m.id === modelId);
     }, [enabledList, modelId, provider]);
 
-    const hasExtendParams = useAiInfraStore(
-      aiModelSelectors.isModelHasExtendParams(modelId ?? '', provider ?? ''),
-    );
-
     const expandedKeys = useGlobalStore(systemStatusSelectors.modelDetailPanelExpandedKeys);
     const updateExpandedKeys = useGlobalStore((s) => s.updateModelDetailPanelExpandedKeys);
 
-    const hasPricing = !!model?.pricing;
-    const formatPrice = hasPricing ? getPrice(model!.pricing!) : null;
+    const pricing = model?.pricing;
+    const hasPricing = !!pricing;
+    const formatPrice = pricing ? getPrice(pricing) : null;
     const pricingGroups = useMemo(
-      () => (hasPricing ? groupPricingUnits(model!.pricing!.units) : []),
-      [hasPricing, model?.pricing],
+      () => (pricing ? groupPricingUnits(pricing.units) : []),
+      [pricing],
     );
 
     const approximatePriceLabel = useMemo(() => {
-      if (!hasPricing || !model?.pricing || !pricingMode) return null;
-      const pricing = model.pricing;
+      if (!pricing || !pricingMode) return null;
       const currency = pricing.currency as ModelPriceCurrency | undefined;
       if (pricingMode === 'image' && typeof pricing.approximatePricePerImage === 'number') {
         const amount = formatPriceByCurrency(pricing.approximatePricePerImage, currency);
@@ -336,7 +314,7 @@ const ModelDetailPanel: FC<ModelDetailPanelProps> = memo(
         });
       }
       return null;
-    }, [hasPricing, model?.pricing, pricingMode, t]);
+    }, [pricing, pricingMode, t]);
 
     if (!model) return null;
 
@@ -349,7 +327,7 @@ const ModelDetailPanel: FC<ModelDetailPanelProps> = memo(
     return (
       <Flexbox className={styles.container}>
         {/* Sections */}
-        {(hasPricing || hasContext || hasAbilities || (hasExtendParams && !pricingMode)) && (
+        {(hasPricing || hasContext || hasAbilities) && (
           <Accordion
             expandedKeys={expandedKeys}
             gap={8}
@@ -556,32 +534,6 @@ const ModelDetailPanel: FC<ModelDetailPanelProps> = memo(
                     </Flexbox>
                   ))}
                 </Flexbox>
-              </AccordionItem>
-            )}
-            {/* Model Config (agent chat only; requires ChatInput zustand provider) */}
-            {hasExtendParams && provider && !pricingMode && (
-              <AccordionItem
-                itemKey="config"
-                paddingBlock={6}
-                paddingInline={8}
-                title={
-                  <Flexbox horizontal align={'center'} gap={8}>
-                    <div
-                      style={{
-                        background: '#52c41a',
-                        borderRadius: 2,
-                        flexShrink: 0,
-                        height: 14,
-                        width: 3,
-                      }}
-                    />
-                    <span className={styles.titleText}>{t('ModelSwitchPanel.detail.config')}</span>
-                  </Flexbox>
-                }
-              >
-                <div className={styles.extraControls}>
-                  <ControlsForm model={model.id} provider={provider} />
-                </div>
               </AccordionItem>
             )}
           </Accordion>
