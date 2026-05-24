@@ -7,7 +7,12 @@ import type {
   ToolExecuteData,
   ToolStartData,
 } from '@lobechat/agent-gateway-client';
-import type { BuiltinToolResult, ChatMessageError, ConversationContext } from '@lobechat/types';
+import type {
+  BuiltinToolResult,
+  ChatMessageError,
+  ConversationContext,
+  UIChatMessage,
+} from '@lobechat/types';
 import { AgentRuntimeErrorType } from '@lobechat/types';
 
 import { messageService } from '@/services/message';
@@ -276,24 +281,35 @@ export const createGatewayEventHandler = (
           accumulatedContent = '';
           accumulatedReasoning = '';
 
-          // Heterogeneous CLI adapters emit `stream_start { newStep: true }`
-          // without a server-side assistant id. Pull the freshly created step
-          // assistant from DB so subsequent live chunks update the RIGHT row
-          // instead of appending onto the previous step's assistant.
-          const messages = await fetchAndReplaceMessages(get, context).catch((error) => {
-            console.error(error);
-            return undefined;
-          });
+          // Skip the DB read ONLY for native gateway streams — those carry
+          // `assistantMessage.id` directly on stream_start AND the preceding
+          // `step_start` already carried the SoT uiMessages snapshot, so
+          // chunks have a valid target in `dbMessagesMap` already. Removing
+          // the await here is what un-blocks the enqueue chain so live
+          // chunks can land mid-stream (LOBE-9501).
+          //
+          // Hetero CLI adapters (Claude Code / Codex) never set
+          // `assistantMessage.id` on stream_start, so the DB read stays
+          // mandatory for them — it (a) pulls the executor-created
+          // placeholder into `dbMessagesMap` so subsequent chunks can
+          // dispatch to it, and (b) resolves the next-step assistant id for
+          // the `newStep` fallback.
+          if (!newAssistantMessageId) {
+            const messages = await fetchAndReplaceMessages(get, context).catch((error) => {
+              console.error(error);
+              return undefined;
+            });
 
-          if (!newAssistantMessageId && data?.newStep) {
-            const resolvedAssistantMessageId = findNextAssistantMessageId(
-              messages as GatewayMessageLike[] | undefined,
-              currentAssistantMessageId,
-            );
+            if (data?.newStep) {
+              const resolvedAssistantMessageId = findNextAssistantMessageId(
+                messages as GatewayMessageLike[] | undefined,
+                currentAssistantMessageId,
+              );
 
-            if (resolvedAssistantMessageId) {
-              currentAssistantMessageId = resolvedAssistantMessageId;
-              get().associateMessageWithOperation(currentAssistantMessageId, operationId);
+              if (resolvedAssistantMessageId) {
+                currentAssistantMessageId = resolvedAssistantMessageId;
+                get().associateMessageWithOperation(currentAssistantMessageId, operationId);
+              }
             }
           }
 
@@ -301,7 +317,10 @@ export const createGatewayEventHandler = (
             payload: {
               agentId: context.agentId,
               ...(currentAssistantMessageId
-                ? { assistantMessageId: currentAssistantMessageId }
+                ? {
+                    anchorMessageId: currentAssistantMessageId,
+                    assistantMessageId: currentAssistantMessageId,
+                  }
                 : {}),
               operationId,
               stepIndex: event.stepIndex,
@@ -403,14 +422,30 @@ export const createGatewayEventHandler = (
           pendingToolsCalling?: unknown[];
           phase?: string;
           requiresApproval?: boolean;
+          uiMessages?: UIChatMessage[];
         };
+
+        // Server attaches the canonical UIChatMessage[] snapshot at every
+        // step boundary (agent-runtime #15152). Use it as Source of Truth
+        // instead of issuing a DB refetch — the refetch returns a stale
+        // assistant placeholder while DB fan-out is still in flight, which
+        // clobbers the in-memory streamed assistantGroup (LOBE-9501).
+        if (Array.isArray(data?.uiMessages)) {
+          get().replaceMessages(data.uiMessages, { action: 'gateway/step_start', context });
+        }
 
         if (data?.phase === 'human_approval' && data.requiresApproval && data.pendingToolsCalling) {
           void notifyDesktopHumanApprovalRequired(get, context);
           // Persist a paused marker so the sidebar reflects "waiting on user" across reload.
           // Resume back to 'running' is free: approve / reject both spawn a new op via the
           // executor entries, which already write 'running'.
-          if (context.topicId) void get().updateTopicStatus?.(context.topicId, 'paused');
+          if (context.topicId)
+            void get().updateTopicStatus?.({
+              agentId: context.agentId,
+              groupId: context.groupId,
+              status: 'paused',
+              topicId: context.topicId,
+            });
         }
 
         break;
@@ -466,11 +501,16 @@ export const createGatewayEventHandler = (
 
       case 'agent_runtime_end': {
         enqueue(async () => {
+          const data = event.data as { uiMessages?: UIChatMessage[] } | undefined;
+
           void emitClientAgentSignalSourceEvent({
             payload: {
               agentId: context.agentId,
               ...(currentAssistantMessageId
-                ? { assistantMessageId: currentAssistantMessageId }
+                ? {
+                    anchorMessageId: currentAssistantMessageId,
+                    assistantMessageId: currentAssistantMessageId,
+                  }
                 : {}),
               operationId,
               topicId: context.topicId ?? undefined,
@@ -487,6 +527,26 @@ export const createGatewayEventHandler = (
             get().markUnreadCompleted(completedOp.context.agentId, completedOp.context.topicId);
           }
 
+          // Terminal step has no later step_start to carry SoT — server
+          // pushes the canonical snapshot directly on this event. Fall back
+          // to a DB refetch only if the snapshot is absent (older server
+          // builds, or push-event delivery edge cases).
+          if (Array.isArray(data?.uiMessages)) {
+            get().replaceMessages(data.uiMessages, {
+              action: 'gateway/agent_runtime_end',
+              context,
+            });
+          } else {
+            await fetchAndReplaceMessages(get, context).catch(console.error);
+          }
+        });
+        break;
+      }
+
+      case 'notify_update': {
+        // Remote hetero agent (openclaw / hermes) wrote a message to DB via
+        // `lh notify`. DB is the source of truth — just refresh the message list.
+        enqueue(async () => {
           await fetchAndReplaceMessages(get, context).catch(console.error);
         });
         break;

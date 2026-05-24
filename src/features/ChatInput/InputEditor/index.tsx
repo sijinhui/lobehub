@@ -1,8 +1,14 @@
-import { isDesktop } from '@lobechat/const';
+import { isDesktop, TRACING_SCENARIOS } from '@lobechat/const';
 import { HotkeyEnum, KeyEnum } from '@lobechat/const/hotkeys';
 import { HETEROGENEOUS_TYPE_LABELS } from '@lobechat/heterogeneous-agents';
-import { chainInputCompletion, escapeXmlAttr } from '@lobechat/prompts';
-import { isCommandPressed, merge } from '@lobechat/utils';
+import {
+  chainInputCompletion,
+  escapeXmlAttr,
+  INPUT_COMPLETION_PROMPT_VERSION,
+  INPUT_COMPLETION_SCHEMA_NAME,
+} from '@lobechat/prompts';
+import { isCommandPressed } from '@lobechat/utils';
+import type { IEditor } from '@lobehub/editor';
 import { INSERT_MENTION_COMMAND, ReactAutoCompletePlugin, ReactMathPlugin } from '@lobehub/editor';
 import { Editor, FloatMenu, useEditorState } from '@lobehub/editor/react';
 import { combineKeys } from '@lobehub/ui';
@@ -15,9 +21,10 @@ import { useHotkeysContext } from 'react-hotkeys-hook';
 import { usePasteFile, useUploadFiles } from '@/components/DragUploadZone';
 import { useEnterToSend } from '@/hooks/useEnterToSend';
 import { useIMECompositionEvent } from '@/hooks/useIMECompositionEvent';
-import { chatService } from '@/services/chat';
+import { aiChatService } from '@/services/aiChat';
 import { useAgentStore } from '@/store/agent';
 import { agentByIdSelectors } from '@/store/agent/selectors';
+import { useChatStore } from '@/store/chat';
 import { useUserStore } from '@/store/user';
 import {
   labPreferSelectors,
@@ -26,6 +33,7 @@ import {
 } from '@/store/user/selectors';
 
 import { useAgentId } from '../hooks/useAgentId';
+import { useChatInputDraft } from '../hooks/useChatInputDraft';
 import { useChatInputStore, useStoreApi } from '../store';
 import {
   INSERT_ACTION_TAG_COMMAND,
@@ -78,6 +86,8 @@ const InputEditor = memo<{
   ]);
 
   const storeApi = useStoreApi();
+  const { restoreDraft, saveDraftDebounced } = useChatInputDraft();
+  const restoredDraftEditorRef = useRef<IEditor | null>(null);
   const state = useEditorState(editor);
   const hotkey = useUserStore(settingsSelectors.getHotkeyById(HotkeyEnum.AddUserMessage));
   const { enableScope, disableScope } = useHotkeysContext();
@@ -140,7 +150,9 @@ const InputEditor = memo<{
     : undefined;
   // Heterogeneous agents (e.g. Claude Code) don't yet support @-assigning to other agents
   const showAgentAssignmentHint =
-    isMentionEnabled && !heterogeneousName && categories.some((category) => category.id === 'agent');
+    isMentionEnabled &&
+    !heterogeneousName &&
+    categories.some((category) => category.id === 'agent');
   const { handleUploadFiles } = useUploadFiles({ model, provider });
 
   // Listen to editor's paste event for file uploads
@@ -207,36 +219,47 @@ const InputEditor = memo<{
       // mid-text causes nested editor updates that freeze the input
       if (afterText.trim()) return null;
 
-      const { enabled: _, ...config } = systemAgentSelectors.inputCompletion(
-        useUserStore.getState(),
-      );
+      const config = systemAgentSelectors.inputCompletion(useUserStore.getState());
       const context = getMessagesRef.current?.();
-      const chainParams = chainInputCompletion(input, afterText, context);
+      const { messages, schema } = chainInputCompletion(input, afterText, context);
 
       const abortController = new AbortController();
       abortSignal.addEventListener('abort', () => abortController.abort());
 
-      let result = '';
+      const currentTopicId = useChatStore.getState().activeTopicId;
 
+      let response: { completion?: string } | null;
       try {
-        await chatService.fetchPresetTaskResult({
-          abortController,
-          onMessageHandle: (chunk) => {
-            if (chunk.type === 'text') {
-              result += chunk.text;
-            }
+        response = (await aiChatService.generateJSON(
+          {
+            messages,
+            model: config.model,
+            provider: config.provider,
+            schema,
+            tracing: {
+              agentId,
+              // Use the user's actual typed text as the row's `input_hint`
+              // — the wrapped prompt's first user message is templated and
+              // not human-scannable.
+              inputHint: input,
+              promptVersion: INPUT_COMPLETION_PROMPT_VERSION,
+              scenario: TRACING_SCENARIOS.InputCompletion,
+              schemaName: INPUT_COMPLETION_SCHEMA_NAME,
+              topicId: currentTopicId,
+            },
           },
-          params: merge(config, chainParams),
-        });
+          abortController,
+        )) as { completion?: string } | null;
       } catch {
         return null;
       }
 
       if (abortSignal.aborted) return null;
 
-      return result.trimEnd() || null;
+      const completion = response?.completion?.trimEnd();
+      return completion || null;
     },
-    [isComposingRef],
+    [isComposingRef, agentId],
   );
 
   const autoCompletePlugin = useMemo(
@@ -300,10 +323,10 @@ const InputEditor = memo<{
     [enableMention, mentionItemsFn, mentionMarkdownWriter, mentionOnSelect, MentionMenuComp],
   );
 
-  const slashOption = useMemo(() => (isSlashEnabled ? { items: slashItems } : undefined), [
-    isSlashEnabled,
-    slashItems,
-  ]);
+  const slashOption = useMemo(
+    () => (isSlashEnabled ? { items: slashItems } : undefined),
+    [isSlashEnabled, slashItems],
+  );
 
   const richRenderProps = useMemo(() => {
     const basePlugins = !enableRichRender
@@ -324,6 +347,27 @@ const InputEditor = memo<{
       ? { enablePasteMarkdown: false, markdownOption: false, plugins }
       : { plugins };
   }, [enableRichRender, expand, slashMenuRef, autoCompletePlugin]);
+
+  const handleEditorInit = useCallback(
+    (editor: IEditor) => {
+      const saved = storeApi.getState()._savedEditorState;
+      storeApi.setState({ _savedEditorState: undefined, editor });
+      if (saved) {
+        requestAnimationFrame(() => {
+          editor.setDocument('json', saved);
+        });
+        return;
+      }
+
+      if (restoredDraftEditorRef.current === editor) return;
+      restoredDraftEditorRef.current = editor;
+
+      requestAnimationFrame(() => {
+        restoreDraft(editor);
+      });
+    },
+    [restoreDraft, storeApi],
+  );
 
   return (
     <Editor
@@ -351,11 +395,14 @@ const InputEditor = memo<{
         minHeight: defaultRows > 1 ? defaultRows * 23 : undefined,
       }}
       onCompositionEnd={({ event }) => compositionProps.onCompositionEnd(event)}
+      onInit={handleEditorInit}
       onBlur={() => {
         disableScope(HotkeyEnum.AddUserMessage);
+        saveDraftDebounced.flush();
       }}
       onChange={() => {
         updateMarkdownContent();
+        saveDraftDebounced();
       }}
       onCompositionStart={({ event }) => {
         compositionProps.onCompositionStart(event);
@@ -382,15 +429,6 @@ const InputEditor = memo<{
       }}
       onFocus={() => {
         enableScope(HotkeyEnum.AddUserMessage);
-      }}
-      onInit={(editor) => {
-        const saved = storeApi.getState()._savedEditorState;
-        storeApi.setState({ _savedEditorState: undefined, editor });
-        if (saved) {
-          requestAnimationFrame(() => {
-            editor.setDocument('json', saved);
-          });
-        }
       }}
       onPressEnter={({ event: e }) => {
         if (e.shiftKey || isComposingRef.current) return;
