@@ -36,8 +36,8 @@ export default {
   'agentSignal.receipts.memory.detail': 'Saved this for future replies',
   'agentSignal.receipts.memory.title': 'Memory saved',
   'agentSignal.receipts.recentActivity': 'Recent activity',
-  'agentSignal.receipts.skill.detail': 'Improved how this assistant handles similar requests',
-  'agentSignal.receipts.skill.title': 'Skill updated',
+  'agentSignal.receipts.skill.detail': 'Self-refined how this agent handles similar requests',
+  'agentSignal.receipts.skill.title': 'Auto-learned a new skill',
   'agents': 'Agents',
   'artifact.generating': 'Generating',
   'artifact.inThread':
@@ -175,6 +175,19 @@ export default {
   'heteroAgent.cloudRepo.notSet': 'No repo selected',
   'heteroAgent.cloudRepo.noRepos': 'No repositories configured. Add them in agent settings.',
   'heteroAgent.cloudRepo.multiSelected': '{{count}} repos selected',
+  'heteroAgent.executionTarget.infoTooltip':
+    'Pick a remote device to drive that machine from the web. "This device" runs the agent locally and is only available inside the desktop app.',
+  'heteroAgent.executionTarget.loading': 'Loading devices…',
+  'heteroAgent.executionTarget.local': 'This device',
+  'heteroAgent.executionTarget.localDesc': 'Run as a local process on this desktop app',
+  'heteroAgent.executionTarget.noDevices':
+    'No remote devices yet. Install the desktop app or run `lh connect` on another machine.',
+  'heteroAgent.executionTarget.offline': 'Offline',
+  'heteroAgent.executionTarget.online': 'Online',
+  'heteroAgent.executionTarget.sandbox': 'Cloud sandbox',
+  'heteroAgent.executionTarget.sandboxDesc': 'Run in an ephemeral cloud sandbox',
+  'heteroAgent.executionTarget.title': 'Execution Device',
+  'heteroAgent.executionTarget.unknownDevice': 'Unknown device',
   'hideForYou':
     "Direct message content is hidden. Please enable 'Show Direct Message Content' in settings to view.",
   'history.title': 'The Agent will keep only the latest {{count}} messages.',
@@ -361,6 +374,8 @@ export default {
   // Platform agent: per-platform descriptions shown in step 0 of the creation modal
   'platformAgent.create.desc.openclaw': 'Connect to OpenClaw running on one of your devices',
   'platformAgent.create.desc.hermes': 'Connect to Hermes running on one of your devices',
+  'platformAgent.create.desc.amp': 'Connect to Amp running on one of your devices',
+  'platformAgent.create.desc.opencode': 'Connect to OpenCode running on one of your devices',
 
   // Platform agent: shared device status label (used in Select option labels)
   'platformAgent.device.online': 'Online',
