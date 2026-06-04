@@ -3,9 +3,11 @@ import os from 'node:os';
 
 import type {
   AgentRunRequestMessage,
+  GatewayMcpStdioParams,
   MessageApiRequestMessage,
   SystemInfoRequestMessage,
   ToolCallRequestMessage,
+  ToolCallResponseMessage,
 } from '@lobechat/device-gateway-client';
 import { GatewayClient } from '@lobechat/device-gateway-client';
 import type { IdentitySource } from '@lobechat/device-identity';
@@ -22,13 +24,60 @@ const logger = createLogger('services:GatewayConnectionSrv');
 
 const DEFAULT_GATEWAY_URL = 'https://device-gateway.lobehub.com';
 
-interface ToolCallHandler {
-  (apiName: string, args: any): Promise<unknown>;
+/**
+ * Result envelope a tool-call handler must return. Mirrors
+ * `BuiltinServerRuntimeOutput` so the renderer-side and remote-device paths
+ * stay symmetric: `content` is the LLM-facing prompt text; `state` carries the
+ * structured payload that downstream persists into `pluginState`.
+ */
+interface ToolCallResult {
+  content: string;
+  error?: unknown;
+  state?: unknown;
+  success: boolean;
 }
 
 interface MessageApiHandler {
   (platform: string, apiName: string, payload: Record<string, unknown>): Promise<unknown>;
 }
+
+interface ToolCallHandler {
+  (apiName: string, args: unknown): Promise<ToolCallResult>;
+}
+
+/**
+ * Handler for tunneled stdio MCP calls. Unlike {@link ToolCallHandler} (which
+ * keys on `apiName` for builtin local-system tools), this carries the MCP
+ * server identity + connection params so the device can spawn the local stdio
+ * server and invoke the tool on it.
+ */
+interface McpCallHandler {
+  (mcpCall: {
+    apiName: string;
+    arguments: string;
+    identifier: string;
+    params: GatewayMcpStdioParams;
+  }): Promise<ToolCallResult>;
+}
+
+/**
+ * Coerce a runtime error (which may be an Error, string, or `{ message }`
+ * object) into the string shape the wire protocol expects. Returns undefined
+ * when there's no error to transmit.
+ */
+const serializeWireError = (err: unknown): string | undefined => {
+  if (err === undefined || err === null) return undefined;
+  if (typeof err === 'string') return err;
+  if (err instanceof Error) return err.message;
+  if (typeof err === 'object' && 'message' in err && typeof err.message === 'string') {
+    return err.message;
+  }
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return String(err);
+  }
+};
 
 interface AgentRunHandler {
   (request: AgentRunRequestMessage): Promise<{ reason?: string; status: 'accepted' | 'rejected' }>;
@@ -60,6 +109,7 @@ export default class GatewayConnectionService extends ServiceModule {
   private tokenProvider: (() => Promise<string | null>) | null = null;
   private tokenRefresher: (() => Promise<{ error?: string; success: boolean }>) | null = null;
   private toolCallHandler: ToolCallHandler | null = null;
+  private mcpCallHandler: McpCallHandler | null = null;
   private messageApiHandler: MessageApiHandler | null = null;
   private agentRunHandler: AgentRunHandler | null = null;
   private deviceRegistrar: DeviceRegistrar | null = null;
@@ -85,6 +135,14 @@ export default class GatewayConnectionService extends ServiceModule {
    */
   setToolCallHandler(handler: ToolCallHandler) {
     this.toolCallHandler = handler;
+  }
+
+  /**
+   * Set the MCP call handler (routes tunneled stdio MCP calls to McpCtr, which
+   * spawns the local stdio server). Distinct from the builtin tool-call handler.
+   */
+  setMcpCallHandler(handler: McpCallHandler) {
+    this.mcpCallHandler = handler;
   }
 
   setMessageApiHandler(handler: MessageApiHandler) {
@@ -375,25 +433,50 @@ export default class GatewayConnectionService extends ServiceModule {
     client: GatewayClient,
   ) => {
     const { requestId, toolCall } = request;
-    const { apiName, arguments: argsStr } = toolCall;
+    const { apiName, arguments: argsStr, identifier, params, type } = toolCall;
 
-    logger.info(`Received tool call: apiName=${apiName}, requestId=${requestId}`);
+    logger.info(
+      `Received tool call: apiName=${apiName}, requestId=${requestId}, type=${type ?? 'tool'}`,
+    );
 
     try {
-      if (!this.toolCallHandler) {
-        throw new Error('No tool call handler configured');
+      let result: ToolCallResult;
+
+      if (type === 'mcp') {
+        // Tunneled stdio MCP call: route to the local MCP client (spawns the
+        // stdio server). Routing is driven by the explicit `type` discriminator,
+        // not by sniffing the payload — the builtin local-system tool switch
+        // keys on `apiName` and has no MCP server context.
+        if (!this.mcpCallHandler) {
+          throw new Error('No MCP call handler configured');
+        }
+        if (!params) {
+          throw new Error('MCP tool call missing connection params');
+        }
+        result = await this.mcpCallHandler({ apiName, arguments: argsStr, identifier, params });
+      } else {
+        if (!this.toolCallHandler) {
+          throw new Error('No tool call handler configured');
+        }
+        const args = JSON.parse(argsStr);
+        result = await this.toolCallHandler(apiName, args);
       }
 
-      const args = JSON.parse(argsStr);
-      const result = await this.toolCallHandler(apiName, args);
+      // Forward the typed envelope unchanged. Critically, do NOT stringify the
+      // whole result into `content` — that would bury the structured payload
+      // inside a JSON blob and lose `state`. The wire protocol carries each
+      // field separately so downstream (`DeviceProxy` → `RuntimeExecutors`)
+      // can persist `state` to `pluginState`. Optional fields are only set
+      // when present so payloads stay minimal.
+      const wireResult: ToolCallResponseMessage['result'] = {
+        content: result.content,
+        success: result.success,
+      };
+      const wireError = serializeWireError(result.error);
+      if (wireError !== undefined) wireResult.error = wireError;
+      if (result.state !== undefined) wireResult.state = result.state;
 
-      client.sendToolCallResponse({
-        requestId,
-        result: {
-          content: typeof result === 'string' ? result : JSON.stringify(result),
-          success: true,
-        },
-      });
+      client.sendToolCallResponse({ requestId, result: wireResult });
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       logger.error(`Tool call failed: apiName=${apiName}, error=${errorMsg}`);
