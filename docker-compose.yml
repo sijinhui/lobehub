@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   lobehub:
-    image: hub.xiaosi.cc/ghcr.io/sijinhui/lobehub
+    image: registry.cn-hangzhou.aliyuncs.com/sijinhui/lobehub
     restart: always
     build:
       context: .
