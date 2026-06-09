@@ -367,7 +367,7 @@ export function defineConfig(config: CustomNextConfig) {
       'oidc-provider',
     ],
 
-    transpilePackages: ['mermaid', 'better-auth-harmony'],
+    transpilePackages: ['mermaid'],
     turbopack: {
       rules: {
         ...(isTest
