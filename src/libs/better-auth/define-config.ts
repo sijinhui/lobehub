@@ -9,7 +9,7 @@ import { type BetterAuthOptions } from 'better-auth/minimal';
 import { betterAuth } from 'better-auth/minimal';
 import { admin, emailOTP, genericOAuth, magicLink } from 'better-auth/plugins';
 import { type BetterAuthPlugin } from 'better-auth/types';
-import { ProxyAgent, setGlobalDispatcher } from 'undici';
+import { Agent, type Dispatcher, ProxyAgent, setGlobalDispatcher } from 'undici';
 
 import { appEnv } from '@/envs/app';
 import { authEnv } from '@/envs/auth';

@@ -46,6 +46,7 @@ vi.mock('better-auth/plugins', () => ({
 }));
 
 vi.mock('undici', () => ({
+  Agent: vi.fn(),
   ProxyAgent: vi.fn(),
   setGlobalDispatcher: vi.fn(),
 }));
