@@ -8,6 +8,7 @@ import type {
 } from '@lobechat/context-engine';
 import type { ChatTopicBotContext, UserInterventionConfig } from '@lobechat/types';
 
+import type { ExecutionPlan } from '@/helpers/executionTarget';
 import { type ServerUserMemoryConfig } from '@/server/modules/Mecha/ContextEngineering/types';
 import type { AgentSignalOperationMarker } from '@/server/services/agentSignal/operationMarker';
 import type { DeviceAccessReason } from '@/server/services/aiAgent/deviceAccessPolicy';
@@ -140,6 +141,15 @@ export interface AgentExecutionParams {
   stepIndex: number;
   /** ID of the pending tool message targeted by the intervention. */
   toolMessageId?: string;
+  /**
+   * Watchdog re-check for a parked `waiting_for_async_tool` op: re-runs the
+   * resume barrier + CAS without claiming the step lock or executing a step.
+   * A no-op when the op already resumed or the barrier is still unsatisfied.
+   * Scheduled one-shot by `tryResumeParentFromAsyncTool` when a sub-agent
+   * completion found the parent not yet resumable (covers the
+   * child-finishes-before-parent-parks race and transient barrier failures).
+   */
+  verifyAsyncToolBarrier?: boolean;
 }
 
 export interface AgentExecutionResult {
@@ -152,6 +162,22 @@ export interface AgentExecutionResult {
   state: any;
   stepResult?: any;
   success: boolean;
+}
+
+/**
+ * Params for the sub-agent completion bridge — see
+ * `AgentRuntimeService.completeSubAgentBridge`.
+ */
+export interface SubAgentBridgeParams {
+  /** Child op's final state — passed in local mode; loaded from the coordinator otherwise. */
+  finalState?: AgentState;
+  /** Child (sub-agent) operation ID. */
+  operationId: string;
+  parentOperationId: string;
+  reason: string;
+  threadId: string;
+  /** The parent's placeholder `role: 'tool'` message to backfill. */
+  toolMessageId: string;
 }
 
 export interface OperationCreationParams {
@@ -168,6 +194,7 @@ export interface OperationCreationParams {
     defaultTaskAssigneeAgentId?: string;
     documentId?: string | null;
     groupId?: string | null;
+    isSubAgent?: boolean;
     scope?: string | null;
     /** Source user message ID used for same-turn Agent Signal procedure suppression. */
     sourceMessageId?: string;
@@ -194,6 +221,13 @@ export interface OperationCreationParams {
   deviceAccessPolicy?: { canUseDevice: boolean; reason: DeviceAccessReason };
   /** Device system info for placeholder variable replacement in Local System systemRole */
   deviceSystemInfo?: Record<string, string>;
+  /**
+   * Resolved execution plan for the run (see `resolveExecutionPlan`).
+   * Forwarded into `state.metadata.executionPlan` so step-level layers (the
+   * `call_llm` device-tool injection) consume the plan instead of re-deriving
+   * device capability from raw config.
+   */
+  executionPlan?: ExecutionPlan;
   /** Discord context for injecting channel/guild info into agent system message */
   discordContext?: any;
   evalContext?: any;
@@ -213,7 +247,7 @@ export interface OperationCreationParams {
   operationSkillSet?: OperationSkillSet;
   /**
    * Operation ID of the parent run when this operation is a sub-agent
-   * invocation (e.g. spawned via `execSubAgentTask`). Persisted to
+   * invocation (e.g. spawned via `execSubAgent`). Persisted to
    * `agent_operations.parent_operation_id` so analytics can join the
    * sub-tree back to its root.
    */

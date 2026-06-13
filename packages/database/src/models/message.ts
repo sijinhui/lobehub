@@ -156,7 +156,6 @@ interface CreateUserAndAssistantMessagesParams {
 
 interface CreateUserAndAssistantMessagesOptions {
   timing?: ModelTimingContext;
-  touchTopicUpdatedAt?: boolean;
 }
 
 interface CreateMessageInsertParams {
@@ -218,22 +217,6 @@ export class MessageModel {
 
   private agentsToSessionsOwnership = () =>
     buildWorkspaceWhere({ userId: this.userId, workspaceId: this.workspaceId }, agentsToSessions);
-
-  /**
-   * Touch topics' updatedAt timestamp within a transaction
-   */
-  private async touchTopicUpdatedAt(trx: Transaction, topicIds: string[]) {
-    if (topicIds.length === 0) return;
-    await trx
-      .update(topics)
-      .set({ updatedAt: new Date() })
-      .where(
-        and(
-          inArray(topics.id, topicIds),
-          buildWorkspaceWhere({ userId: this.userId, workspaceId: this.workspaceId }, topics),
-        ),
-      );
-  }
 
   // **************** Query *************** //
 
@@ -1877,16 +1860,6 @@ export class MessageModel {
         this.db.transaction(async (trx) => {
           const item = await this.createInTransaction(trx, params, id, timing);
 
-          // Touch topic's updatedAt when creating a message in a topic
-          if (params.topicId) {
-            await runTimedStage(
-              timing,
-              'db.message.create.topic.touchUpdatedAt',
-              () => this.touchTopicUpdatedAt(trx, [params.topicId!]),
-              { topicCount: 1 },
-            );
-          }
-
           return item;
         }),
       {
@@ -1900,7 +1873,7 @@ export class MessageModel {
 
   createUserAndAssistantMessages = async (
     { userMessage, assistantMessage }: CreateUserAndAssistantMessagesParams,
-    { timing, touchTopicUpdatedAt = true }: CreateUserAndAssistantMessagesOptions = {},
+    { timing }: CreateUserAndAssistantMessagesOptions = {},
   ): Promise<{ assistantMessage: DBMessageItem; userMessage: DBMessageItem }> => {
     const userMessageId = this.genId();
     const assistantMessageId = this.genId();
@@ -1964,15 +1937,6 @@ export class MessageModel {
             'db.message.createUserAndAssistant.assistant',
           );
 
-          if (touchTopicUpdatedAt && topicIds.length > 0) {
-            await runTimedStage(
-              timing,
-              'db.message.createUserAndAssistant.topic.touchUpdatedAt',
-              () => this.touchTopicUpdatedAt(trx, topicIds),
-              { topicCount: topicIds.length },
-            );
-          }
-
           const userMessageItem = messageMap.get(userMessageId);
           const assistantMessageItem = messageMap.get(assistantMessageId);
 
@@ -1999,12 +1963,8 @@ export class MessageModel {
       ),
     );
 
-    const topicIds = [...new Set(newMessages.map((m) => m.topicId).filter(Boolean))] as string[];
-
     return this.db.transaction(async (trx) => {
       const result = await trx.insert(messages).values(messagesToInsert);
-
-      await this.touchTopicUpdatedAt(trx, topicIds);
 
       return result;
     });
@@ -2094,15 +2054,7 @@ export class MessageModel {
               { hasMetadata: !!metadataPatch, valueKeys: Object.keys(message) },
             );
 
-            // Touch topic's updatedAt when updating a message
             if (updated?.topicId) {
-              await runTimedStage(
-                timing,
-                'db.message.update.topic.touchUpdatedAt',
-                () => this.touchTopicUpdatedAt(trx, [updated.topicId!]),
-                { topicCount: 1 },
-              );
-
               // When this write carries token usage (assistant finalize / hetero
               // step), recompute the topic's denormalized usage rollup from its
               // messages. Gated on the *incoming* payload so streaming
@@ -2392,6 +2344,41 @@ export class MessageModel {
     }
   };
 
+  /**
+   * Id of the most recently-created main-agent `role:'tool'` message under an
+   * assistant message, or `undefined` when the assistant produced no tools.
+   *
+   * Heterogeneous step boundaries chain the next assistant off the previous
+   * step's final tool message (the wire is `asst → tool → … → asst → tool`).
+   * The persistence handler normally derives that anchor from its in-memory
+   * tool state, but on a warm replica that did NOT drain the prior step's
+   * `tools_calling` (or before the assistant's `tools[]` JSONB has its
+   * `result_msg_id` backfilled) that state is empty — so it falls back here.
+   *
+   * The `role:'tool'` rows are the authoritative anchor: they are created
+   * (Phase 2) with `parentId` = their step's assistant, earlier than and
+   * independent of the JSONB mirror's `result_msg_id` backfill (Phase 3).
+   * `threadId IS NULL` excludes subagent tool rows, which live on their own
+   * thread and must not anchor the main-agent wire.
+   */
+  getLastChildToolMessageId = async (assistantMessageId: string): Promise<string | undefined> => {
+    const [row] = await this.db
+      .select({ id: messages.id })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.parentId, assistantMessageId),
+          eq(messages.role, 'tool'),
+          isNull(messages.threadId),
+          this.ownership(),
+        ),
+      )
+      .orderBy(desc(messages.createdAt))
+      .limit(1);
+
+    return row?.id;
+  };
+
   updateTranslate = async (id: string, translate: Partial<ChatTranslate>) => {
     const result = await this.db.query.messageTranslates.findFirst({
       where: and(eq(messageTranslates.id, id), this.translatesOwnership()),
@@ -2673,7 +2660,10 @@ export class MessageModel {
 
   // **************** Helper *************** //
 
-  private genId = () => idGenerator('messages', 14);
+  // 18-char hash (was 14): widen the message id space — the coordinator-driven
+  // hetero subagent flow allocates many ids per run, and a few extra chars keep
+  // collision odds negligible at that volume.
+  private genId = () => idGenerator('messages', 18);
 
   private matchSession = (sessionId?: string | null) => {
     if (sessionId === INBOX_SESSION_ID) return isNull(messages.sessionId);

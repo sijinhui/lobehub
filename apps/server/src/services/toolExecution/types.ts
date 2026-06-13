@@ -3,7 +3,7 @@ import { type LobeChatDatabase } from '@lobechat/database';
 import {
   type ChatToolPayload,
   type ClientSecretPayload,
-  type ExecSubAgentTaskParams,
+  type ExecSubAgentParams,
 } from '@lobechat/types';
 
 export interface ToolExecutionMemoryEmbeddingRuntime {
@@ -61,15 +61,17 @@ export interface ToolExecutionContext {
   /** Current page document ID for page-scoped conversations */
   documentId?: string | null;
   /**
-   * Spawn a sub-agent as an independent async operation. Injected by the agent
-   * runtime (forwarded from `RuntimeExecutorContext.execSubAgentTask`) so the
-   * `callSubAgent` server tool can fork a child op without a circular import.
+   * Legacy agent invocation callback forwarded from RuntimeExecutorContext.
+   * Kept for tool runtimes that still dispatch through exec_sub_agent style
+   * flows; `lobe-agent.callSubAgent` uses the per-call `subAgent` runner below.
    */
-  execSubAgentTask?: (params: ExecSubAgentTaskParams) => Promise<unknown>;
+  execSubAgent?: (params: ExecSubAgentParams) => Promise<unknown>;
   /** Per-call execution timeout resolved by the agent runtime. */
   executionTimeoutMs?: number;
   /** Current group ID for group chat context */
   groupId?: string | null;
+  /** Whether this tool call is executing inside an isolated sub-agent run. */
+  isSubAgent?: boolean;
   /**
    * Optional server-owned embedding runtime for memory search.
    *

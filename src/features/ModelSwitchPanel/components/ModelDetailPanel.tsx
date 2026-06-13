@@ -29,6 +29,7 @@ import type { FC } from 'react';
 import { memo, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { useBusinessModelPricing } from '@/business/client/hooks/useBusinessModelPricing';
 import { useEnabledChatModels } from '@/hooks/useEnabledChatModels';
 import { useGlobalStore } from '@/store/global';
 import type { ModelDetailPanelExpandedKey } from '@/store/global/initialState';
@@ -332,23 +333,28 @@ const ModelDetailPanel: FC<ModelDetailPanelProps> = memo(
 
     const expandedKeys = useGlobalStore(systemStatusSelectors.modelDetailPanelExpandedKeys);
     const updateExpandedKeys = useGlobalStore((s) => s.updateModelDetailPanelExpandedKeys);
+    const applyBusinessModelPricing = useBusinessModelPricing();
 
     const pricing = model?.pricing;
+    const displayPricing = useMemo(
+      () => applyBusinessModelPricing({ model: modelId, pricing, provider }),
+      [applyBusinessModelPricing, modelId, pricing, provider],
+    );
     const isCreditPricing = provider === BRANDING_PROVIDER;
-    const hasPricing = !!pricing;
-    const formatPrice = pricing ? getPrice(pricing, isCreditPricing) : null;
+    const hasPricing = !!displayPricing;
+    const formatPrice = displayPricing ? getPrice(displayPricing, isCreditPricing) : null;
     const pricingGroups = useMemo(
-      () => (pricing ? groupPricingUnits(pricing.units) : []),
-      [pricing],
+      () => (displayPricing ? groupPricingUnits(displayPricing.units) : []),
+      [displayPricing],
     );
 
     const approximatePriceLabel = useMemo(() => {
-      if (!pricing || !pricingMode) return null;
-      const currency = pricing.currency as ModelPriceCurrency | undefined;
-      if (pricingMode === 'image' && typeof pricing.approximatePricePerImage === 'number') {
+      if (!displayPricing || !pricingMode) return null;
+      const currency = displayPricing.currency as ModelPriceCurrency | undefined;
+      if (pricingMode === 'image' && typeof displayPricing.approximatePricePerImage === 'number') {
         const amount = isCreditPricing
-          ? formatBrandingCreditRate(pricing.approximatePricePerImage, 'image')
-          : formatPriceByCurrency(pricing.approximatePricePerImage, currency);
+          ? formatBrandingCreditRate(displayPricing.approximatePricePerImage, 'image')
+          : formatPriceByCurrency(displayPricing.approximatePricePerImage, currency);
         return t(
           isCreditPricing
             ? 'ModelSwitchPanel.detail.pricing.credits.perImage'
@@ -361,10 +367,10 @@ const ModelDetailPanel: FC<ModelDetailPanelProps> = memo(
           },
         );
       }
-      if (pricingMode === 'video' && typeof pricing.approximatePricePerVideo === 'number') {
+      if (pricingMode === 'video' && typeof displayPricing.approximatePricePerVideo === 'number') {
         const amount = isCreditPricing
-          ? formatBrandingCreditRate(pricing.approximatePricePerVideo)
-          : formatPriceByCurrency(pricing.approximatePricePerVideo, currency);
+          ? formatBrandingCreditRate(displayPricing.approximatePricePerVideo)
+          : formatPriceByCurrency(displayPricing.approximatePricePerVideo, currency);
         return t(
           isCreditPricing
             ? 'ModelSwitchPanel.detail.pricing.credits.perVideo'
@@ -378,7 +384,7 @@ const ModelDetailPanel: FC<ModelDetailPanelProps> = memo(
         );
       }
       return null;
-    }, [isCreditPricing, pricing, pricingMode, t]);
+    }, [displayPricing, isCreditPricing, pricingMode, t]);
 
     const getCreditsUnitLabel = (unit: PricingUnit['unit']) =>
       t(`ModelSwitchPanel.detail.pricing.credits.${unit}` as any, {
@@ -524,7 +530,7 @@ const ModelDetailPanel: FC<ModelDetailPanelProps> = memo(
                     <span className={styles.actionText}>{approximatePriceLabel}</span>
                   ) : (
                     <Flexbox horizontal align={'center'} className={styles.actionText} gap={8}>
-                      {getCachedTextInputUnitRate(model.pricing!) && (
+                      {getCachedTextInputUnitRate(displayPricing) && (
                         <Tooltip
                           title={getPricingTooltip('cachedInput', formatPrice!.cachedInput.current)}
                         >
@@ -597,7 +603,7 @@ const ModelDetailPanel: FC<ModelDetailPanelProps> = memo(
                             prefix={isCreditPricing ? '' : '$'}
                             price={formatUnitRate(
                               unit,
-                              model.pricing?.currency as ModelPriceCurrency,
+                              displayPricing.currency as ModelPriceCurrency,
                               isCreditPricing,
                             )}
                             suffix={

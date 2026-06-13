@@ -1,7 +1,7 @@
 'use client';
 
 import { type KlavisServerType } from '@lobechat/const';
-import { Avatar, Button as LobeButton, DropdownMenu, Flexbox, Icon } from '@lobehub/ui';
+import { Avatar, Button as LobeButton, DropdownMenu, Flexbox, Icon, Tooltip } from '@lobehub/ui';
 import { confirmModal } from '@lobehub/ui/base-ui';
 import { Button } from 'antd';
 import { cssVar } from 'antd-style';
@@ -10,6 +10,7 @@ import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { createKlavisSkillDetailModal } from '@/features/SkillStore/SkillDetail';
+import { usePermission } from '@/hooks/usePermission';
 import { useToolStore } from '@/store/tool';
 import { type KlavisServer } from '@/store/tool/slices/klavisStore';
 import { KlavisServerStatus } from '@/store/tool/slices/klavisStore';
@@ -23,14 +24,17 @@ const POLL_TIMEOUT_MS = 15_000;
 
 interface KlavisSkillItemProps {
   isSelected?: boolean;
+  onDelete?: () => void;
   onSelect?: () => void;
   server?: KlavisServer;
   serverType: KlavisServerType;
 }
 
 const KlavisSkillItem = memo<KlavisSkillItemProps>(
-  ({ serverType, server, isSelected, onSelect }) => {
+  ({ serverType, server, isSelected, onSelect, onDelete }) => {
     const { t } = useTranslation('setting');
+    const { allowed: canCreate, reason: createReason } = usePermission('create_content');
+    const { allowed: canEdit, reason: editReason } = usePermission('edit_own_content');
     const [isConnecting, setIsConnecting] = useState(false);
     const [isWaitingAuth, setIsWaitingAuth] = useState(false);
 
@@ -139,6 +143,7 @@ const KlavisSkillItem = memo<KlavisSkillItemProps>(
     );
 
     const handleConnect = async () => {
+      if (!canCreate || !canEdit) return;
       if (!userId) return;
       if (server) return;
 
@@ -165,6 +170,7 @@ const KlavisSkillItem = memo<KlavisSkillItemProps>(
     };
 
     const handleDisconnect = () => {
+      if (!canEdit) return;
       if (!server) return;
       confirmModal({
         cancelText: t('cancel', { ns: 'common' }),
@@ -226,22 +232,27 @@ const KlavisSkillItem = memo<KlavisSkillItemProps>(
 
       if (!server) {
         return (
-          <Button
-            icon={<Icon icon={SquareArrowOutUpRight} />}
-            type="default"
-            onClick={handleConnect}
-          >
-            {t('tools.klavis.connect', { defaultValue: 'Connect' })}
-          </Button>
+          <Tooltip title={!canCreate ? createReason : editReason}>
+            <Button
+              disabled={!canCreate || !canEdit}
+              icon={<Icon icon={SquareArrowOutUpRight} />}
+              type="default"
+              onClick={handleConnect}
+            >
+              {t('tools.klavis.connect', { defaultValue: 'Connect' })}
+            </Button>
+          </Tooltip>
         );
       }
 
       if (server.status === KlavisServerStatus.PENDING_AUTH) {
         return (
           <Button
+            disabled={!canCreate || !canEdit}
             icon={<Icon icon={SquareArrowOutUpRight} />}
             type="default"
             onClick={() => {
+              if (!canCreate || !canEdit) return;
               if (server.oauthUrl) {
                 openOAuthWindow(server.oauthUrl, server.identifier);
               }
@@ -259,6 +270,7 @@ const KlavisSkillItem = memo<KlavisSkillItemProps>(
             items={[
               {
                 danger: true,
+                disabled: !canEdit,
                 icon: <Icon icon={Unplug} />,
                 key: 'disconnect',
                 label: t('tools.klavis.disconnect', { defaultValue: 'Disconnect' }),
@@ -266,7 +278,9 @@ const KlavisSkillItem = memo<KlavisSkillItemProps>(
               },
             ]}
           >
-            <LobeButton icon={MoreHorizontalIcon} />
+            <Tooltip title={editReason}>
+              <LobeButton disabled={!canEdit} icon={MoreHorizontalIcon} />
+            </Tooltip>
           </DropdownMenu>
         );
       }

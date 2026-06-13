@@ -60,7 +60,8 @@ import {
 import { chainCompressContext } from '@lobechat/prompts';
 import {
   type ChatToolPayload,
-  type ExecSubAgentTaskParams,
+  type ExecSubAgentParams,
+  type ExecVirtualSubAgentParams,
   type MessageToolCall,
   type UIChatMessage,
 } from '@lobechat/types';
@@ -73,6 +74,7 @@ import { TopicModel } from '@/database/models/topic';
 import { UserModel } from '@/database/models/user';
 import { type LobeChatDatabase } from '@/database/type';
 import { fileEnv } from '@/envs/file';
+import { type ExecutionPlan, isDeviceCapablePlan } from '@/helpers/executionTarget';
 import { serverMessagesEngine } from '@/server/modules/Mecha/ContextEngineering';
 import { type EvalContext } from '@/server/modules/Mecha/ContextEngineering/types';
 import { initModelRuntimeFromDB } from '@/server/modules/ModelRuntime';
@@ -202,6 +204,51 @@ const isEmptyModelCompletion = (params: {
   return true;
 };
 
+type ReasoningReplayNode = {
+  children?: ReasoningReplayNode[];
+  members?: ReasoningReplayNode[];
+  reasoning?: unknown;
+};
+
+const stripAssistantReasoningForReplay = (messages: UIChatMessage[]): UIChatMessage[] => {
+  const stripMessage = <T extends ReasoningReplayNode>(message: T): T => {
+    let changed = false;
+
+    const children = message.children?.map((child) => {
+      const strippedChild = stripMessage(child);
+      if (strippedChild !== child) changed = true;
+      return strippedChild;
+    });
+
+    const members = message.members?.map((member) => {
+      const strippedMember = stripMessage(member);
+      if (strippedMember !== member) changed = true;
+      return strippedMember;
+    });
+
+    if ('reasoning' in message) changed = true;
+    if (!changed) return message;
+
+    const { reasoning: _reasoning, ...messageWithoutReasoning } = message;
+
+    return {
+      ...messageWithoutReasoning,
+      ...(children ? { children } : {}),
+      ...(members ? { members } : {}),
+    } as T;
+  };
+
+  let changed = false;
+
+  const strippedMessages = messages.map((message) => {
+    const strippedMessage = stripMessage(message);
+    if (strippedMessage !== message) changed = true;
+    return strippedMessage;
+  });
+
+  return changed ? strippedMessages : messages;
+};
+
 const GEN_AI_FUNCTION_TOOL_TYPE: ToolType = 'function';
 
 type ToolFailureKind = 'replan' | 'retry' | 'stop';
@@ -285,8 +332,9 @@ const buildPostProcessUrl = (
  * The runner creates the pending placeholder tool message that anchors the
  * isolation thread (so the UI shows a loading state and the completion bridge
  * has a message to backfill), then kicks off the child op asynchronously and
- * returns immediately. Returns `undefined` when sub-agent execution is not
- * available (no `execSubAgentTask` callback, or missing agent/topic context).
+ * returns immediately. Returns `undefined` when virtual sub-agent execution is
+ * not available (no `execVirtualSubAgent` callback, or missing agent/topic
+ * context).
  */
 const buildServerSubAgentRunner = (
   ctx: RuntimeExecutorContext,
@@ -294,8 +342,8 @@ const buildServerSubAgentRunner = (
   chatToolPayload: ChatToolPayload,
   parentMessageId: string,
 ): ServerSubAgentRunner | undefined => {
-  const execSubAgentTask = ctx.execSubAgentTask;
-  if (!execSubAgentTask) return undefined;
+  const execVirtualSubAgent = ctx.execVirtualSubAgent;
+  if (!execVirtualSubAgent) return undefined;
 
   const agentId = state.metadata?.agentId;
   const topicId = ctx.topicId ?? state.metadata?.topicId;
@@ -318,16 +366,15 @@ const buildServerSubAgentRunner = (
         topicId,
       });
 
-      // 2. Fork the child op anchored to the placeholder. `resumeParentOnComplete`
-      //    tells execSubAgentTask to register the completion bridge that
-      //    backfills this tool message and resumes the parent op.
-      const result = (await execSubAgentTask({
+      // 2. Fork the virtual child op anchored to the placeholder. The virtual
+      //    entry marks the child as `isSubAgent` and registers the completion
+      //    bridge that backfills this tool message and resumes the parent op.
+      const result = (await execVirtualSubAgent({
         agentId: targetAgentId ?? agentId,
         groupId: state.metadata?.groupId ?? undefined,
         instruction,
         parentMessageId: placeholder.id,
         parentOperationId: ctx.operationId,
-        resumeParentOnComplete: true,
         timeout,
         title: description,
         topicId,
@@ -476,11 +523,17 @@ export interface RuntimeExecutorContext {
   discordContext?: any;
   evalContext?: EvalContext;
   /**
-   * Callback to spawn a sub-agent task server-side.
+   * Callback to run a legacy agent invocation server-side.
    * Injected by AiAgentService so exec_sub_agent / exec_sub_agents executors
-   * can dispatch callAgent-triggered tasks without a circular import.
+   * can dispatch callAgent-triggered runs without a circular import.
    */
-  execSubAgentTask?: (params: ExecSubAgentTaskParams) => Promise<unknown>;
+  execSubAgent?: (params: ExecSubAgentParams) => Promise<unknown>;
+  /**
+   * Callback to fork a `lobe-agent.callSubAgent` virtual child run. Unlike
+   * execSubAgent, this path installs the async completion bridge and marks the
+   * child operation as a sub-agent.
+   */
+  execVirtualSubAgent?: (params: ExecVirtualSubAgentParams) => Promise<unknown>;
   hookDispatcher?: HookDispatcher;
   loadAgentState?: (operationId: string) => Promise<AgentState | null>;
   messageModel: MessageModel;
@@ -532,17 +585,23 @@ export const createRuntimeExecutors = (
     const provider = llmPayload.provider || state.modelRuntimeConfig?.provider;
     // Resolve tools via ToolResolver (unified tool injection).
     //
-    // Belt-and-suspenders: even if `aiAgent.execAgent` ever forgets to clear
-    // `state.metadata.activeDeviceId` for a non-trusted sender, swallowing
-    // it here keeps `buildStepToolDelta` from re-injecting `local-system` —
-    // the engine's enabledToolIds exclusion alone is not enough, since the
-    // delta builder treats activeDeviceId as an independent activation
-    // signal and only dedupes against already-enabled tools.
+    // Single-track device gate: `buildStepToolDelta` treats activeDeviceId as
+    // an independent activation signal (it only dedupes against already-
+    // enabled tools), so any id that reaches it WILL inject local-system. The
+    // execution plan is the only authority on whether this session may touch
+    // a device — swallow the id for non-device-capable plans (`none`,
+    // `sandbox`) and for denied senders, even if `state.metadata.activeDeviceId`
+    // was populated by a bug or a mid-run side effect. Plans absent on old /
+    // resumed operations fall back to the policy-only gate.
     const devicePolicy = state.metadata?.deviceAccessPolicy as
       | { canUseDevice: boolean; reason: DeviceAccessReason }
       | undefined;
+    const executionPlan = state.metadata?.executionPlan as ExecutionPlan | undefined;
+    const planAllowsDevice = !executionPlan || isDeviceCapablePlan(executionPlan);
     const activeDeviceId =
-      devicePolicy?.canUseDevice === false ? undefined : state.metadata?.activeDeviceId;
+      devicePolicy?.canUseDevice === false || !planAllowsDevice
+        ? undefined
+        : state.metadata?.activeDeviceId;
     const operationToolSet: OperationToolSet = state.operationToolSet ?? {
       enabledToolIds: [],
       executorMap: state.toolExecutorMap ?? {},
@@ -660,7 +719,7 @@ export const createRuntimeExecutors = (
 
     try {
       type ContentPart = { text: string; type: 'text' } | { image: string; type: 'image' };
-      let shouldPersistAssistantReasoning = false;
+      let shouldReplayAssistantReasoning = false;
       let preserveThinkingForPayload: boolean | undefined;
 
       // Process messages through serverMessagesEngine to inject system role, knowledge, etc.
@@ -699,19 +758,21 @@ export const createRuntimeExecutors = (
           modelSupportsPreserveThinkingFromCard ||
           (!modelCard && providerSupportsPreserveThinkingFallback);
 
-        shouldPersistAssistantReasoning =
-          preserveThinkingRequested && modelSupportsPreserveThinking;
+        shouldReplayAssistantReasoning = preserveThinkingRequested && modelSupportsPreserveThinking;
         preserveThinkingForPayload =
           modelSupportsPreserveThinking && typeof preserveThinkingConfigured === 'boolean'
             ? preserveThinkingConfigured
             : undefined;
+        const messagesForContext = shouldReplayAssistantReasoning
+          ? (llmPayload.messages as UIChatMessage[])
+          : stripAssistantReasoningForReplay(llmPayload.messages as UIChatMessage[]);
 
         // Extract <refer_topic> tags from messages and fetch summaries.
         // Skip if messages already contain injected topic_reference_context
         // (e.g., from client-side contextEngineering preprocessing) to avoid double injection.
         let topicReferences;
         const alreadyHasTopicRefs = (
-          llmPayload.messages as Array<{ content: string | unknown }>
+          messagesForContext as Array<{ content: string | unknown }>
         ).some(
           (m) => typeof m.content === 'string' && m.content.includes('topic_reference_context'),
         );
@@ -720,7 +781,7 @@ export const createRuntimeExecutors = (
           const topicModel = new TopicModel(ctx.serverDB, ctx.userId, ctx.workspaceId);
           const messageModel = new MessageModelClass(ctx.serverDB, ctx.userId, ctx.workspaceId);
           topicReferences = await resolveTopicReferences(
-            llmPayload.messages as Array<{ content: string | unknown }>,
+            messagesForContext as Array<{ content: string | unknown }>,
             async (topicId) => topicModel.findById(topicId),
             async (topicId) => {
               const topic = await topicModel.findById(topicId);
@@ -762,7 +823,7 @@ export const createRuntimeExecutors = (
           agentConfig?.slug === 'web-onboarding' ||
           resolved.enabledToolIds.includes('lobe-web-onboarding');
         const alreadyHasOnboardingContext = (
-          llmPayload.messages as Array<{ content: string | unknown }>
+          messagesForContext as Array<{ content: string | unknown }>
         ).some((message) => {
           if (typeof message.content !== 'string') return false;
 
@@ -1043,7 +1104,7 @@ export const createRuntimeExecutors = (
                 name: kb.name ?? '',
               })),
           },
-          messages: llmPayload.messages as UIChatMessage[],
+          messages: messagesForContext,
           model,
           provider,
           systemRole: agentConfig.systemRole ?? undefined,
@@ -1071,14 +1132,14 @@ export const createRuntimeExecutors = (
           CONTEXT_ENGINEERING_SPAN_NAME,
           {
             attributes: buildContextEngineeringAttributes({
-              hasImages: (llmPayload.messages as Array<{ content?: unknown }>).some(
+              hasImages: (messagesForContext as Array<{ content?: unknown }>).some(
                 (m) =>
                   Array.isArray(m.content) &&
                   (m.content as Array<{ type?: string }>).some((p) => p?.type === 'image_url'),
               ),
               historyCompressed:
-                Array.isArray(llmPayload.messages) &&
-                llmPayload.messages.some((m: { role?: string }) => m?.role === 'compressedGroup'),
+                Array.isArray(messagesForContext) &&
+                messagesForContext.some((m: { role?: string }) => m?.role === 'compressedGroup'),
               knowledgeCount:
                 (contextEngineInput.knowledge?.knowledgeBases?.length ?? 0) +
                 (contextEngineInput.knowledge?.fileContents?.length ?? 0),
@@ -1086,7 +1147,7 @@ export const createRuntimeExecutors = (
                 (contextEngineInput.knowledge?.knowledgeBases?.length ?? 0) > 0 ||
                 (contextEngineInput.knowledge?.fileContents?.length ?? 0) > 0,
               memoryInjected: Boolean(contextEngineInput.userMemory?.memories),
-              messageCount: llmPayload.messages.length,
+              messageCount: messagesForContext.length,
               operationId,
               stepIndex,
               systemRoleLength: contextEngineInput.systemRole?.length,
@@ -1639,9 +1700,10 @@ export const createRuntimeExecutors = (
                 };
               }
 
-              const persistedReasoning = shouldPersistAssistantReasoning
-                ? finalReasoning
-                : undefined;
+              // preserveThinking only gates whether reasoning is replayed into the
+              // next LLM payload (state.messages); the DB copy powers UI display
+              // after refresh and must always be saved.
+              const replayedReasoning = shouldReplayAssistantReasoning ? finalReasoning : undefined;
 
               try {
                 // Build metadata object
@@ -1675,7 +1737,7 @@ export const createRuntimeExecutors = (
                   content: finalContent,
                   imageList: imageList.length > 0 ? imageList : undefined,
                   metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
-                  reasoning: persistedReasoning,
+                  reasoning: finalReasoning,
                   search: grounding,
                   tools: persistedTools,
                 });
@@ -1708,7 +1770,7 @@ export const createRuntimeExecutors = (
               newState.messages.push({
                 content,
                 id: assistantMessageItem.id,
-                reasoning: persistedReasoning,
+                reasoning: replayedReasoning,
                 role: 'assistant',
                 tool_calls: stateToolCalls,
               });
@@ -2402,9 +2464,10 @@ export const createRuntimeExecutors = (
                 activeDeviceId: state.metadata?.activeDeviceId,
                 agentId: state.metadata?.agentId,
                 documentId: state.metadata?.documentId,
-                execSubAgentTask: ctx.execSubAgentTask,
+                execSubAgent: ctx.execSubAgent,
                 executionTimeoutMs: timeoutMs,
                 groupId: state.metadata?.groupId,
+                isSubAgent: state.metadata?.isSubAgent === true,
                 memoryToolPermission: agentConfig?.chatConfig?.memory?.toolPermission,
                 messageId: state.metadata?.sourceMessageId,
                 operationId,
@@ -2982,9 +3045,10 @@ export const createRuntimeExecutors = (
                     activeDeviceId: state.metadata?.activeDeviceId,
                     agentId: state.metadata?.agentId,
                     documentId: state.metadata?.documentId,
-                    execSubAgentTask: ctx.execSubAgentTask,
+                    execSubAgent: ctx.execSubAgent,
                     executionTimeoutMs: timeoutMs,
                     groupId: state.metadata?.groupId,
+                    isSubAgent: state.metadata?.isSubAgent === true,
                     memoryToolPermission: batchAgentConfig?.chatConfig?.memory?.toolPermission,
                     messageId: state.metadata?.sourceMessageId,
                     operationId,
@@ -3349,7 +3413,7 @@ export const createRuntimeExecutors = (
    * Mirrors the client-side exec_sub_agent executor in createAgentExecutors.ts
    * but runs entirely server-side (no polling required).  Flow:
    *   1. Create a task message (role: 'task') as a placeholder visible in the UI.
-   *   2. Fire execSubAgentTask via the injected callback so the sub-agent runs as
+   *   2. Fire execSubAgent via the injected callback so the sub-agent runs as
    *      an independent QStash operation.
    *   3. Return a sub_agent_result context so GeneralChatAgent calls the LLM once
    *      more and the parent agent can acknowledge the delegation.
@@ -3365,6 +3429,32 @@ export const createRuntimeExecutors = (
     const agentId = state.metadata?.agentId;
     // targetAgentId is a cloud extension injected by agentManagement.callAgent
     const targetAgentId = (task as any).targetAgentId ?? agentId;
+
+    if (state.metadata?.isSubAgent === true) {
+      log('[%s] Nested sub-agent dispatch blocked', taskLogId);
+      return {
+        events,
+        newState: state,
+        nextContext: {
+          payload: {
+            parentMessageId,
+            result: {
+              error: 'Sub-agent calls cannot be triggered from within another sub-agent.',
+              success: false,
+              taskMessageId: parentMessageId,
+              threadId: '',
+            },
+          },
+          phase: 'sub_agent_result',
+          session: {
+            messageCount: state.messages.length,
+            sessionId: operationId,
+            status: 'running',
+            stepCount: state.stepCount + 1,
+          },
+        } as unknown as AgentRuntimeContext,
+      };
+    }
 
     let taskMessageId: string | undefined;
     try {
@@ -3390,9 +3480,9 @@ export const createRuntimeExecutors = (
     const effectiveTaskMessageId = taskMessageId ?? parentMessageId;
 
     let dispatched = false;
-    if (ctx.execSubAgentTask && topicId && agentId) {
+    if (ctx.execSubAgent && topicId && agentId) {
       try {
-        await ctx.execSubAgentTask({
+        await ctx.execSubAgent({
           agentId: targetAgentId,
           groupId: state.metadata?.groupId ?? undefined,
           instruction: task.instruction,
@@ -3417,7 +3507,7 @@ export const createRuntimeExecutors = (
         }
       }
     } else {
-      log('[%s] execSubAgentTask not available, skipping sub-agent dispatch', taskLogId);
+      log('[%s] execSubAgent not available, skipping sub-agent dispatch', taskLogId);
     }
 
     return {
@@ -3447,7 +3537,7 @@ export const createRuntimeExecutors = (
    * Server-side exec_sub_agents executor
    *
    * Same as exec_sub_agent but for a batch.  Each sub-agent is fired
-   * independently via execSubAgentTask and a task message is created for each.
+   * independently via execSubAgent and a task message is created for each.
    */
   exec_sub_agents: async (instruction, state) => {
     const { payload } = instruction as AgentInstructionExecSubAgents;
@@ -3460,6 +3550,33 @@ export const createRuntimeExecutors = (
     const agentId = state.metadata?.agentId;
 
     log('[%s] Starting batch of %d tasks', taskLogId, tasks.length);
+
+    if (state.metadata?.isSubAgent === true) {
+      log('[%s] Nested sub-agent batch dispatch blocked', taskLogId);
+      return {
+        events,
+        newState: state,
+        nextContext: {
+          payload: {
+            parentMessageId,
+            results: tasks.map((task) => ({
+              description: task.description,
+              error: 'Sub-agent calls cannot be triggered from within another sub-agent.',
+              success: false,
+              taskMessageId: parentMessageId,
+              threadId: '',
+            })),
+          },
+          phase: 'sub_agents_batch_result',
+          session: {
+            messageCount: state.messages.length,
+            sessionId: operationId,
+            status: 'running',
+            stepCount: state.stepCount + 1,
+          },
+        } as unknown as AgentRuntimeContext,
+      };
+    }
 
     let lastTaskMessageId: string | undefined;
     const taskResults: Array<{ success: boolean; taskMessageId: string; threadId: string }> = [];
@@ -3489,9 +3606,9 @@ export const createRuntimeExecutors = (
       }
 
       let taskDispatched = false;
-      if (ctx.execSubAgentTask && topicId && agentId) {
+      if (ctx.execSubAgent && topicId && agentId) {
         try {
-          await ctx.execSubAgentTask({
+          await ctx.execSubAgent({
             agentId: targetAgentId,
             groupId: state.metadata?.groupId ?? undefined,
             instruction: task.instruction,
