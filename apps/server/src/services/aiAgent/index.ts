@@ -95,6 +95,7 @@ import {
   resolveAgentSelfIterationCapability,
 } from '@/server/services/agentSignal/featureGate';
 import { shouldSuppressSignal } from '@/server/services/agentSignal/suppressSignal';
+import { ComposioService } from '@/server/services/composio';
 import { deviceGateway } from '@/server/services/deviceGateway';
 import { DocumentService } from '@/server/services/document';
 import { FileService } from '@/server/services/file';
@@ -104,7 +105,6 @@ import {
 } from '@/server/services/file/resolveAttachments';
 import { HeterogeneousAgentService } from '@/server/services/heterogeneousAgent';
 import type { ConversationHistoryEntry } from '@/server/services/heterogeneousAgent/cloudHeteroContext';
-import { KlavisService } from '@/server/services/klavis';
 import { MarketService } from '@/server/services/market';
 import { markdownToTxt } from '@/utils/markdownToTxt';
 
@@ -287,7 +287,7 @@ export class AiAgentService {
   private readonly topicModel: TopicModel;
   private readonly agentRuntimeService: AgentRuntimeService;
   private readonly marketService: MarketService;
-  private readonly klavisService: KlavisService;
+  private readonly composioService: ComposioService;
 
   private readonly workspaceId?: string;
 
@@ -327,7 +327,7 @@ export class AiAgentService {
       workspaceId: wsId,
     });
     this.marketService = new MarketService({ userInfo: { userId } });
-    this.klavisService = new KlavisService({ db, userId, workspaceId: wsId });
+    this.composioService = new ComposioService({ db, userId });
   }
 
   private async resolveOperationTaskId(
@@ -417,9 +417,10 @@ export class AiAgentService {
    * Execute a single agent step against this service's runtime.
    *
    * Delegates to the internal AgentRuntimeService, which is already wired with
-   * the `execSubAgent` fork callback. The QStash step worker drives stepping
-   * through here so `lobe-agent.callSubAgent` can fork sub-agents — building a
-   * bare runtime there would lose the callback and fail with SUB_AGENT_UNAVAILABLE.
+   * the agent-invocation fork callbacks. The QStash step worker drives stepping
+   * through here so `lobe-agent.callSubAgent` can fork virtual sub-agents —
+   * building a bare runtime there would lose the callback and fail with
+   * SUB_AGENT_UNAVAILABLE.
    */
   executeStep(params: AgentExecutionParams): Promise<AgentExecutionResult> {
     return this.agentRuntimeService.executeStep(params);
@@ -1392,7 +1393,7 @@ export class AiAgentService {
 
     // These are needed outside the tools block (for agent management context, skill engine, etc.)
     let lobehubSkillManifests: LobeToolManifest[] = [];
-    let klavisManifests: LobeToolManifest[] = [];
+    let composioManifests: LobeToolManifest[] = [];
     let connectorManifests: ReturnType<typeof buildConnectorManifests> = [];
     let agentPlugins: string[] = [...(agentConfig?.plugins ?? []), ...(additionalPluginIds || [])];
 
@@ -1457,7 +1458,7 @@ export class AiAgentService {
           : [];
 
       // Only connectors WITH a real MCP endpoint (mcpServerUrl or stdio) can replace plugins in the
-      // manifest. Connectors WITHOUT an endpoint (e.g. Lobehub/Klavis OAuth skills synced via
+      // manifest. Connectors WITHOUT an endpoint (e.g. Lobehub/Composio OAuth skills synced via
       // syncToolsFromClient) must continue using their original plugin executor path — otherwise
       // after humanIntervention approval the runtime tries to call mcpServerUrl='' and returns empty.
       const connectorsMcp = connectors.filter(
@@ -1502,24 +1503,24 @@ export class AiAgentService {
       }
       log('execAgent: got %d lobehub skill manifests', lobehubSkillManifests.length);
 
-      // 5d. Fetch Klavis tool manifests from database
+      // 5d. Fetch Composio tool manifests from database
       try {
-        klavisManifests = await this.klavisService.getKlavisManifests();
+        composioManifests = await this.composioService.getComposioManifests();
       } catch (error) {
-        log('execAgent: failed to fetch klavis manifests: %O', error);
+        log('execAgent: failed to fetch composio manifests: %O', error);
       }
-      log('execAgent: got %d klavis manifests', klavisManifests.length);
+      log('execAgent: got %d composio manifests', composioManifests.length);
 
-      // 5d-1. Patch Lobehub/Klavis manifests AND community-MCP plugin manifests
+      // 5d-1. Patch Lobehub/Composio manifests AND community-MCP plugin manifests
       // with connector tool permissions. This enables needs_approval (→
       // humanIntervention: 'required') and disabled (→ blocking description) for
       // any tool managed via the connector system but executed through a
-      // non-connector path (Lobehub/Klavis skills, community MCP plugins).
+      // non-connector path (Lobehub/Composio skills, community MCP plugins).
       // The 'disabled' hard-block is already enforced universally in
       // ToolExecutionService; this surfaces the permission to the model too.
       if (
         lobehubSkillManifests.length > 0 ||
-        klavisManifests.length > 0 ||
+        composioManifests.length > 0 ||
         pluginsWithoutConnectors.length > 0
       ) {
         try {
@@ -1528,7 +1529,7 @@ export class AiAgentService {
           const { ConnectorToolModel } = await import('@/database/models/connectorTool');
           const allIdentifiers = [
             ...lobehubSkillManifests.map((m) => m.identifier),
-            ...klavisManifests.map((m) => m.identifier),
+            ...composioManifests.map((m) => m.identifier),
             ...pluginsWithoutConnectors.map((p) => p.identifier),
           ];
           const connectorEntries =
@@ -1554,7 +1555,7 @@ export class AiAgentService {
                 : m;
             });
 
-            klavisManifests = klavisManifests.map((m) => {
+            composioManifests = composioManifests.map((m) => {
               const perms = connectorToolsMap.get(m.identifier);
               return perms && perms.size > 0
                 ? (patchManifestWithPermissions(m as any, perms as any) as any)
@@ -1686,7 +1687,7 @@ export class AiAgentService {
       );
 
       const toolsEngine = createServerAgentToolsEngine(toolsContext, {
-        additionalManifests: [...lobehubSkillManifests, ...klavisManifests, ...connectorManifests],
+        additionalManifests: [...lobehubSkillManifests, ...composioManifests, ...connectorManifests],
         agentConfig: {
           chatConfig: agentConfig.chatConfig ?? undefined,
           plugins: agentPlugins,
@@ -1716,9 +1717,9 @@ export class AiAgentService {
           ...agentPlugins,
           ...(disableLocalSystem ? [] : [LocalSystemManifest.identifier]),
           RemoteDeviceManifest.identifier,
-          // Include LobeHub Skills and Klavis tools so they are passed to generateToolsDetailed
+          // Include LobeHub Skills and Composio tools so they are passed to generateToolsDetailed
           ...lobehubSkillManifests.map((m) => m.identifier),
-          ...klavisManifests.map((m) => m.identifier),
+          ...composioManifests.map((m) => m.identifier),
           // Connector manifests are also injected as additionalManifests
           ...connectorManifests.map((m) => m.identifier),
         ]),
@@ -1739,7 +1740,7 @@ export class AiAgentService {
 
       // Single guard for every `toolManifestMap[id] = ...` ingest below.
       // Mirrors the post-merge filter in `createServerToolsEngine`: an
-      // installed plugin, a LobeHub Skill, or a Klavis manifest declaring
+      // installed plugin, a LobeHub Skill, or a Composio manifest declaring
       // `identifier: 'lobe-remote-device'` would otherwise reach the
       // activator-discovery map and let an external bot sender enable it
       // (). Centralising the check at the ingest layer means
@@ -1813,14 +1814,14 @@ export class AiAgentService {
         toolManifestMap[LocalSystemManifest.identifier] = LocalSystemManifest as LobeToolManifest;
       }
 
-      // Include lobehub skill and klavis manifests for activator discovery
+      // Include lobehub skill and composio manifests for activator discovery
       for (const manifest of lobehubSkillManifests) {
         if (!isManifestIngestAllowed(manifest.identifier)) continue;
         if (!toolManifestMap[manifest.identifier]) {
           toolManifestMap[manifest.identifier] = manifest;
         }
       }
-      for (const manifest of klavisManifests) {
+      for (const manifest of composioManifests) {
         if (!isManifestIngestAllowed(manifest.identifier)) continue;
         if (!toolManifestMap[manifest.identifier]) {
           toolManifestMap[manifest.identifier] = manifest;
@@ -1831,9 +1832,9 @@ export class AiAgentService {
         if (!isManifestIngestAllowed(manifest.identifier)) continue;
         toolSourceMap[manifest.identifier] = 'lobehubSkill';
       }
-      for (const manifest of klavisManifests) {
+      for (const manifest of composioManifests) {
         if (!isManifestIngestAllowed(manifest.identifier)) continue;
-        toolSourceMap[manifest.identifier] = 'klavis';
+        toolSourceMap[manifest.identifier] = 'composio';
       }
 
       // Mark tools that must run on the user's machine (local-system, stdio
@@ -1865,10 +1866,10 @@ export class AiAgentService {
       }
 
       log(
-        'execAgent: generated %d tools, %d lobehub skills, %d klavis tools',
+        'execAgent: generated %d tools, %d lobehub skills, %d composio tools',
         tools?.length ?? 0,
         lobehubSkillManifests.length,
-        klavisManifests.length,
+        composioManifests.length,
       );
 
       const agentSelfIterationEnabled = agentConfig.chatConfig?.selfIteration?.enabled === true;
@@ -2094,12 +2095,12 @@ export class AiAgentService {
           name: manifest.meta?.title || manifest.identifier,
           type: 'lobehub-skill' as const,
         })),
-        // Klavis tools
-        ...klavisManifests.map((manifest) => ({
+        // Composio tools
+        ...composioManifests.map((manifest) => ({
           description: manifest.meta?.description,
           identifier: manifest.identifier,
           name: manifest.meta?.title || manifest.identifier,
-          type: 'klavis' as const,
+          type: 'composio' as const,
         })),
         // Custom connectors (user-added MCP servers)
         ...connectorManifests.map((manifest) => ({
@@ -2298,7 +2299,7 @@ export class AiAgentService {
         : undefined;
 
     // 13. Create user message in database
-    // Include threadId if provided (for SubAgent task execution in isolated Thread)
+    // Include threadId if provided (for isolated agent execution)
     const userMessageRecord = runFromHistory
       ? undefined
       : await this.messageModel.create({
@@ -2346,7 +2347,7 @@ export class AiAgentService {
     }
 
     // 14. Create assistant message placeholder in database
-    // Include threadId if provided (for SubAgent task execution in isolated Thread)
+    // Include threadId if provided (for isolated agent execution)
     const assistantMessageRecord = await this.messageModel.create({
       agentId: persistAgentId,
       content: LOADING_FLAT,
@@ -2940,7 +2941,12 @@ export class AiAgentService {
     });
 
     // 3. Create hooks for updating Thread metadata and source message
-    const threadHooks = this.createThreadHooks(thread.id, startedAt, parentMessageId);
+    const threadHooks = this.createThreadHooks(
+      thread.id,
+      startedAt,
+      parentMessageId,
+      options.logScope,
+    );
     // For the virtual sub-agent path, also register the completion bridge that
     // backfills the parent's placeholder tool message and resumes the parked
     // parent op once the child run is done. Registered last so its tool-message
@@ -3063,6 +3069,7 @@ export class AiAgentService {
     threadId: string,
     startedAt: string,
     sourceMessageId: string,
+    logScope: 'execSubAgent' | 'execVirtualSubAgent' = 'execSubAgent',
   ): StepLifecycleCallbacks {
     // Accumulator for tracking metrics across steps
     let accumulatedToolCalls = 0;
@@ -3088,9 +3095,9 @@ export class AiAgentService {
               totalToolCalls: accumulatedToolCalls,
             },
           });
-          log('execSubAgent: updated thread %s metadata after step %d', threadId, state.stepCount);
+          log('%s: updated thread %s metadata after step %d', logScope, threadId, state.stepCount);
         } catch (error) {
-          log('execSubAgent: failed to update thread metadata: %O', error);
+          log('%s: failed to update thread metadata: %O', logScope, error);
         }
       },
 
@@ -3124,7 +3131,7 @@ export class AiAgentService {
 
         // Log error when the isolated run fails
         if (reason === 'error' && finalState.error) {
-          console.error('execSubAgent: run failed for thread %s:', threadId, finalState.error);
+          console.error('%s: run failed for thread %s:', logScope, threadId, finalState.error);
         }
 
         try {
@@ -3138,7 +3145,7 @@ export class AiAgentService {
             await this.messageModel.update(sourceMessageId, {
               content: lastAssistantMessage.content,
             });
-            log('execSubAgent: updated source message %s with summary', sourceMessageId);
+            log('%s: updated source message %s with summary', logScope, sourceMessageId);
           }
 
           // Format error for proper serialization (Error objects don't serialize with JSON.stringify)
@@ -3161,13 +3168,14 @@ export class AiAgentService {
           });
 
           log(
-            'execSubAgent: thread %s completed with status %s, reason: %s',
+            '%s: thread %s completed with status %s, reason: %s',
+            logScope,
             threadId,
             status,
             reason,
           );
         } catch (error) {
-          console.error('execSubAgent: failed to update thread on completion: %O', error);
+          console.error('%s: failed to update thread on completion: %O', logScope, error);
         }
       },
     };
@@ -3181,6 +3189,7 @@ export class AiAgentService {
     threadId: string,
     startedAt: string,
     sourceMessageId: string,
+    logScope: 'execSubAgent' | 'execVirtualSubAgent',
   ): AgentHook[] {
     let accumulatedToolCalls = 0;
 
@@ -3207,7 +3216,7 @@ export class AiAgentService {
               },
             });
           } catch (error) {
-            log('Thread hook afterStep: failed to update metadata: %O', error);
+            log('%s: thread hook afterStep failed to update metadata: %O', logScope, error);
           }
         },
         id: 'thread-metadata-update',
@@ -3247,7 +3256,8 @@ export class AiAgentService {
 
           if (event.reason === 'error' && finalState.error) {
             console.error(
-              'Thread hook onComplete: run failed for thread %s:',
+              '%s: thread hook onComplete run failed for thread %s:',
+              logScope,
               threadId,
               finalState.error,
             );
@@ -3284,13 +3294,14 @@ export class AiAgentService {
             });
 
             log(
-              'Thread hook onComplete: thread %s status=%s reason=%s',
+              '%s: thread hook onComplete thread %s status=%s reason=%s',
+              logScope,
               threadId,
               status,
               event.reason,
             );
           } catch (error) {
-            console.error('Thread hook onComplete: failed to update: %O', error);
+            console.error('%s: thread hook onComplete failed to update: %O', logScope, error);
           }
         },
         id: 'thread-completion',

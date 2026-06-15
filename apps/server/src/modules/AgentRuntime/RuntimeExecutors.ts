@@ -14,14 +14,14 @@ import {
 } from '@lobechat/agent-runtime';
 import { LobeActivatorIdentifier } from '@lobechat/builtin-tool-activator';
 import {
+  type ComposioServiceSummary,
   type CredSummary,
+  generateComposioServicesList,
   generateCredsList,
-  generateKlavisServicesList,
-  type KlavisServiceSummary,
 } from '@lobechat/builtin-tool-creds';
 import { LocalSystemManifest } from '@lobechat/builtin-tool-local-system';
 import { BRANDING_PROVIDER } from '@lobechat/business-const';
-import { KLAVIS_SERVER_TYPES } from '@lobechat/const';
+import { COMPOSIO_APP_TYPES } from '@lobechat/const';
 import {
   type AgentContextDocument,
   type AgentGroupConfig,
@@ -68,7 +68,7 @@ import {
 import { sanitizeToolCallArguments, serializePartsForStorage } from '@lobechat/utils';
 import debug from 'debug';
 
-import { klavisEnv } from '@/config/klavis';
+import { composioEnv } from '@/config/composio';
 import { type MessageModel, MessageModel as MessageModelClass } from '@/database/models/message';
 import { TopicModel } from '@/database/models/topic';
 import { UserModel } from '@/database/models/user';
@@ -324,7 +324,7 @@ const buildPostProcessUrl = (
 };
 
 /**
- * Build the per-tool-call server sub-agent runner injected into the tool
+ * Build the per-tool-call server virtual sub-agent runner injected into the tool
  * execution context. Closes over the current tool payload + parent message so
  * the `callSubAgent` server tool can fork a child op without re-deriving the
  * message anchor (which it cannot do correctly from its own context).
@@ -336,7 +336,7 @@ const buildPostProcessUrl = (
  * not available (no `execVirtualSubAgent` callback, or missing agent/topic
  * context).
  */
-const buildServerSubAgentRunner = (
+const buildServerVirtualSubAgentRunner = (
   ctx: RuntimeExecutorContext,
   state: AgentState,
   chatToolPayload: ChatToolPayload,
@@ -388,7 +388,7 @@ const buildServerSubAgentRunner = (
           await ctx.messageModel.deleteMessage(placeholder.id);
         } catch (error) {
           log(
-            'buildServerSubAgentRunner: failed to clean up placeholder %s: %O',
+            'buildServerVirtualSubAgentRunner: failed to clean up placeholder %s: %O',
             placeholder.id,
             error,
           );
@@ -999,39 +999,38 @@ export const createRuntimeExecutors = (
           }
         }
 
-        // {{KLAVIS_SERVICES_LIST}} — used by lobe-creds system role (Klavis integrations section).
-        // Mirrors client-side: klavisStoreSelectors.getServers() filtered by connection status.
-        let klavisServicesListStr = '';
-        if (ctx.serverDB && ctx.userId && !!klavisEnv.KLAVIS_API_KEY) {
+        // {{COMPOSIO_SERVICES_LIST}} — used by lobe-creds system role (Composio integrations section).
+        let composioServicesListStr = '';
+        if (ctx.serverDB && ctx.userId && !!composioEnv.COMPOSIO_API_KEY) {
           try {
             const { PluginModel } = await import('@/database/models/plugin');
             const pluginModel = new PluginModel(ctx.serverDB, ctx.userId, ctx.workspaceId);
             const allPlugins = await pluginModel.query();
-            const validKlavisIds = new Set(KLAVIS_SERVER_TYPES.map((t) => t.identifier));
+            const validComposioIds = new Set(COMPOSIO_APP_TYPES.map((t) => t.identifier));
             const connectedIds = new Set(
               allPlugins
                 .filter(
                   (p) =>
-                    validKlavisIds.has(p.identifier) &&
-                    (p.customParams as any)?.klavis?.isAuthenticated === true,
+                    validComposioIds.has(p.identifier) &&
+                    (p.customParams as any)?.composio?.status === 'ACTIVE',
                 )
                 .map((p) => p.identifier),
             );
-            const connected: KlavisServiceSummary[] = KLAVIS_SERVER_TYPES.filter((t) =>
+            const connected: ComposioServiceSummary[] = COMPOSIO_APP_TYPES.filter((t) =>
               connectedIds.has(t.identifier),
             ).map((t) => ({ identifier: t.identifier, name: t.label }));
-            const available: KlavisServiceSummary[] = KLAVIS_SERVER_TYPES.filter(
+            const available: ComposioServiceSummary[] = COMPOSIO_APP_TYPES.filter(
               (t) => !connectedIds.has(t.identifier),
             ).map((t) => ({ identifier: t.identifier, name: t.label }));
-            klavisServicesListStr = generateKlavisServicesList(connected, available);
+            composioServicesListStr = generateComposioServicesList(connected, available);
             log(
-              'Fetched Klavis services for {{KLAVIS_SERVICES_LIST}}: connected=%d, available=%d',
+              'Fetched Composio services for {{COMPOSIO_SERVICES_LIST}}: connected=%d, available=%d',
               connected.length,
               available.length,
             );
           } catch (error) {
             log(
-              'Failed to fetch Klavis services for {{KLAVIS_SERVICES_LIST}} substitution: %O',
+              'Failed to fetch Composio services for {{COMPOSIO_SERVICES_LIST}} substitution: %O',
               error,
             );
           }
@@ -1055,7 +1054,7 @@ export const createRuntimeExecutors = (
             sandbox_enabled: sandboxEnabled,
             sandbox_uploaded_files: sandboxUploadedFiles,
             CREDS_LIST: credsListStr,
-            KLAVIS_SERVICES_LIST: klavisServicesListStr,
+            COMPOSIO_SERVICES_LIST: composioServicesListStr,
             // Memory tool variables
             memory_effort: memoryEffort,
           },
@@ -2446,7 +2445,7 @@ export const createRuntimeExecutors = (
           execution = { attempts: 1, result: dispatchResult };
         } else {
           // Inject source from sourceMap so BuiltinToolsExecutor can route
-          // lobehubSkill / klavis tools correctly (LLM responses don't carry source)
+          // lobehubSkill / composio tools correctly (LLM responses don't carry source)
           if (toolSource && !chatToolPayload.source) {
             chatToolPayload.source = toolSource;
           }
@@ -2483,7 +2482,7 @@ export const createRuntimeExecutors = (
                 scope: state.metadata?.scope,
                 serverDB: ctx.serverDB,
                 skipResultTruncation: true,
-                subAgent: buildServerSubAgentRunner(
+                subAgent: buildServerVirtualSubAgentRunner(
                   ctx,
                   state,
                   chatToolPayload,
@@ -2725,14 +2724,15 @@ export const createRuntimeExecutors = (
 
         log('[%s:%d] Tool execution completed', operationId, stepIndex);
 
-        // When the tool result carries an execSubAgent / execSubAgents state the
-        // GeneralChatAgent needs `stop: true` in the payload to detect it and
-        // emit the matching exec_sub_agent / exec_sub_agents instruction.  Without
-        // this flag the agent falls through to the normal LLM-call path and the
-        // sub-agent is never spawned.
-        const execTaskStateType = executionResult.state?.type as string | undefined;
-        const isExecTaskState =
-          execTaskStateType === 'execSubAgent' || execTaskStateType === 'execSubAgents';
+        // When a legacy callAgent task result carries execSubAgent / execSubAgents
+        // state, the GeneralChatAgent needs `stop: true` in the payload to detect
+        // it and emit the matching exec_sub_agent / exec_sub_agents instruction.
+        // Without this flag the agent falls through to the normal LLM-call path
+        // and the background agent run is never spawned.
+        const legacyAgentInvocationStateType = executionResult.state?.type as string | undefined;
+        const isLegacyAgentInvocationState =
+          legacyAgentInvocationStateType === 'execSubAgent' ||
+          legacyAgentInvocationStateType === 'execSubAgents';
 
         executeToolSpan.setAttributes(
           buildExecuteToolResultAttributes({ attempts: execution.attempts, success: isSuccess }),
@@ -2748,7 +2748,7 @@ export const createRuntimeExecutors = (
               isSuccess,
               // Pass tool message ID as parentMessageId for the next LLM call
               parentMessageId: toolMessageId,
-              ...(isExecTaskState && { stop: true }),
+              ...(isLegacyAgentInvocationState && { stop: true }),
               toolCall: chatToolPayload,
               toolCallId: chatToolPayload.id,
             },
@@ -3025,7 +3025,7 @@ export const createRuntimeExecutors = (
               execution = { attempts: 1, result: dispatchResult };
             } else {
               // Inject source from sourceMap so BuiltinToolsExecutor can route
-              // lobehubSkill / klavis tools correctly (LLM responses don't carry source)
+              // lobehubSkill / composio tools correctly (LLM responses don't carry source)
               const batchToolSource =
                 state.operationToolSet?.sourceMap?.[chatToolPayload.identifier] ??
                 state.toolSourceMap?.[chatToolPayload.identifier];
@@ -3055,7 +3055,7 @@ export const createRuntimeExecutors = (
                     scope: state.metadata?.scope,
                     serverDB: ctx.serverDB,
                     skipResultTruncation: true,
-                    subAgent: buildServerSubAgentRunner(
+                    subAgent: buildServerVirtualSubAgentRunner(
                       ctx,
                       state,
                       chatToolPayload,

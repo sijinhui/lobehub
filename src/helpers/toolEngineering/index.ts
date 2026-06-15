@@ -19,7 +19,7 @@ import { getAgentStoreState } from '@/store/agent';
 import { agentChatConfigSelectors, agentSelectors } from '@/store/agent/selectors';
 import { getToolStoreState } from '@/store/tool';
 import {
-  klavisStoreSelectors,
+  composioStoreSelectors,
   lobehubSkillStoreSelectors,
   pluginSelectors,
 } from '@/store/tool/selectors';
@@ -49,7 +49,7 @@ export interface ToolsEngineConfig {
  * A manifest is usable by ToolsEngine only if it has a non-empty `api` array.
  * ToolsEngine.convertManifestsToTools calls `manifest.api.map(...)` unconditionally,
  * so any entry with `api` missing / non-array will crash the whole tools build.
- * Sources that populate manifests (installed plugins, Klavis, LobeHub skills, MCP)
+ * Sources that populate manifests (installed plugins, Composio, LobeHub skills, MCP)
  * have no shared schema validation, so we guard defensively at the merge point.
  */
 const isValidToolManifest = (m: ToolManifest | undefined): m is ToolManifest =>
@@ -126,9 +126,9 @@ export const createToolsEngine = (config: ToolsEngineConfig = {}): ToolsEngine =
   // Get all builtin tool manifests
   const builtinManifests = toolStoreState.builtinTools.map((tool) => tool.manifest as ToolManifest);
 
-  // Get Klavis tool manifests
-  const klavisTools = klavisStoreSelectors.klavisAsLobeTools(toolStoreState);
-  const klavisManifests = klavisTools.map((tool) => tool.manifest as ToolManifest).filter(Boolean);
+  // Get Composio tool manifests
+  const composioTools = composioStoreSelectors.composioAsLobeTools(toolStoreState);
+  const composioManifests = composioTools.map((tool) => tool.manifest as ToolManifest).filter(Boolean);
 
   // Get LobeHub Skill tool manifests
   const lobehubSkillTools = lobehubSkillStoreSelectors.lobehubSkillAsLobeTools(toolStoreState);
@@ -141,7 +141,7 @@ export const createToolsEngine = (config: ToolsEngineConfig = {}): ToolsEngine =
   const allManifests = [
     ...dropInvalidManifests(pluginManifests, 'installedPlugins'),
     ...dropInvalidManifests(builtinManifests, 'builtinTools'),
-    ...dropInvalidManifests(klavisManifests, 'klavis'),
+    ...dropInvalidManifests(composioManifests, 'composio'),
     ...dropInvalidManifests(lobehubSkillManifests, 'lobehubSkills'),
     ...dropInvalidManifests(connectorManifests, 'connectors'),
     ...dropInvalidManifests(additionalManifests, 'additionalManifests'),
