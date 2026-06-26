@@ -28,8 +28,10 @@ import { parseSSOProviders } from '@/libs/better-auth/utils/server';
 import { EmailService } from '@/server/services/email';
 import { UserService } from '@/server/services/user';
 
-// Configure HTTP proxy for OAuth provider requests (e.g., Google token exchange)
-// Node.js native fetch doesn't respect system proxy settings
+// Configure HTTP proxy for OAuth provider requests (e.g., Google token exchange).
+// Node.js native fetch doesn't respect system proxy settings, and we only want the proxy to apply
+// to OAuth domains that are otherwise unreachable (e.g. Google/GitHub in certain regions) — other
+// traffic stays direct. Set OAUTH_PROXY_URL to enable; left unset, nothing changes.
 // Ref: https://github.com/better-auth/better-auth/issues/7396
 const proxyUrl = authEnv.OAUTH_PROXY_URL;
 
@@ -44,7 +46,8 @@ const PROXY_REQUIRED_DOMAINS = [
 ];
 
 if (proxyUrl) {
-  // Create a selective dispatcher that only uses proxy for specific domains
+  // Selective dispatcher that only routes OAuth-related domains through the proxy;
+  // everything else (including local/next requests) goes direct.
   class SelectiveProxyDispatcher extends Agent {
     #proxyAgent: ProxyAgent;
     #directAgent: Agent;

@@ -6,7 +6,7 @@ import { Alert, Button, Flexbox, type MenuProps } from '@lobehub/ui';
 import { type ReactNode } from 'react';
 import { memo, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 
 import {
   getBusinessChatInputSendAreaPrefix,
@@ -21,6 +21,8 @@ import {
   type SendButtonHandler,
   type SendButtonProps,
 } from '@/features/ChatInput/store/initialState';
+import { useAgentStore } from '@/store/agent';
+import { chatConfigByIdSelectors } from '@/store/agent/selectors';
 import { useChatStore } from '@/store/chat';
 import { operationSelectors } from '@/store/chat/selectors';
 import { selectCurrentTurnTodosFromMessages } from '@/store/chat/slices/message/selectors/dbMessage';
@@ -33,18 +35,14 @@ import { dataSelectors, messageStateSelectors, useConversationStore } from '../s
 import TodoProgress from '../TodoProgress';
 import OpStatusTray from './OpStatusTray';
 import QueueTray from './QueueTray';
-import { getConversationChatInputUiState } from './utils';
+import {
+  getContextWindowMessages,
+  getConversationChatInputUiState,
+  toChatInputMessages,
+} from './utils';
 
 /** Max recent messages to feed into auto-complete context (≈10 conversation turns) */
 const MAX_CONTEXT_MESSAGES = 25;
-
-const toChatInputMessages = (messages: ReturnType<typeof dataSelectors.dbMessages>) =>
-  messages
-    .filter((m) => m.role === 'user' || m.role === 'assistant' || m.role === 'tool')
-    .map((m) => ({
-      content: typeof m.content === 'string' ? m.content : '',
-      role: m.role as 'user' | 'assistant' | 'system',
-    }));
 
 const InputCompletionErrorAlertContent = memo<{
   inputCompletionError: InputCompletionError;
@@ -110,6 +108,12 @@ export interface ChatInputProps {
    */
   children?: ReactNode;
   /**
+   * Render the editor as a single-row strip by dropping the action bar footer.
+   * Send still works through Enter; pair with `showControlBar={false}` to also
+   * drop the control bar. Defaults to false — other chat surfaces stay untouched.
+   */
+  compact?: boolean;
+  /**
    * Custom node to render in place of the default ControlBar
    * (Local/Cloud/Approval). When provided, replaces the default bar.
    */
@@ -124,6 +128,13 @@ export interface ChatInputProps {
    * Hides the QueueTray and gates handleSend so Enter does not enqueue.
    */
   disableQueue?: boolean;
+  /**
+   * Externally force the send action off, regardless of input content. Grays
+   * out the send button and gates handleSend so Enter can't send either. Used
+   * by host surfaces that are temporarily read-only (e.g. the Page Agent when
+   * another member holds the page edit lock).
+   */
+  disableSend?: boolean;
   /**
    * Extra action items to append to the ActionBar
    */
@@ -190,8 +201,10 @@ const ChatInput = memo<ChatInputProps>(
   ({
     actionBarStyle,
     allowExpand,
+    compact = false,
     disableFollowUpVariant,
     disableQueue,
+    disableSend,
     feature,
     leftActions = [],
     leftContent,
@@ -210,14 +223,8 @@ const ChatInput = memo<ChatInputProps>(
   }) => {
     const { t } = useTranslation('chat');
 
-    const dbMessages = useConversationStore(dataSelectors.dbMessages);
-    const contextWindowMessages = useMemo(() => toChatInputMessages(dbMessages), [dbMessages]);
-    const getMessages = useCallback(
-      () => contextWindowMessages.slice(-MAX_CONTEXT_MESSAGES),
-      [contextWindowMessages],
-    );
-
     // ConversationStore state
+    const dbMessages = useConversationStore(dataSelectors.dbMessages);
     const context = useConversationStore((s) => s.context);
     const draftKey = useMemo(() => messageMapKey(context), [context]);
     const [agentId, inputMessage, sendMessage, stopGenerating] = useConversationStore((s) => [
@@ -226,6 +233,23 @@ const ChatInput = memo<ChatInputProps>(
       s.sendMessage,
       s.stopGenerating,
     ]);
+    const [enableHistoryCount, historyCount] = useAgentStore((s) => [
+      chatConfigByIdSelectors.getEnableHistoryCountById(agentId || '')(s),
+      chatConfigByIdSelectors.getHistoryCountById(agentId || '')(s),
+    ]);
+    const chatInputMessages = useMemo(() => toChatInputMessages(dbMessages), [dbMessages]);
+    const contextWindowMessages = useMemo(
+      () =>
+        getContextWindowMessages(dbMessages, {
+          enableHistoryCount,
+          historyCount,
+        }),
+      [dbMessages, enableHistoryCount, historyCount],
+    );
+    const getMessages = useCallback(
+      () => chatInputMessages.slice(-MAX_CONTEXT_MESSAGES),
+      [chatInputMessages],
+    );
     const updateInputMessage = useConversationStore((s) => s.updateInputMessage);
     const setEditor = useConversationStore((s) => s.setEditor);
     const setChatInputOverlayHeight = useConversationStore((s) => s.setChatInputOverlayHeight);
@@ -291,7 +315,9 @@ const ChatInput = memo<ChatInputProps>(
     });
     // Input stays enabled during agent execution — messages are queued.
     // When disableQueue is set (e.g. onboarding), block sending while loading.
-    const disabled = isInputEmpty || isUploadingFiles || (!!disableQueue && isInputLoading);
+    // disableSend hard-blocks regardless of content (host surface is read-only).
+    const disabled =
+      isInputEmpty || isUploadingFiles || (!!disableQueue && isInputLoading) || !!disableSend;
     const shouldUsePlainSendButton = !showSendMenu && !!sendMenu;
     const businessCostEstimateAlert = useBusinessChatInputCostEstimateAlert();
     const businessSendAreaPrefix = getBusinessChatInputSendAreaPrefix(sendAreaPrefix);
@@ -299,6 +325,10 @@ const ChatInput = memo<ChatInputProps>(
     // Send handler - gets message, clears editor immediately, then sends
     const handleSend: SendButtonHandler = useCallback(
       async ({ clearContent, getMarkdownContent, getEditorData }) => {
+        // Host surface is read-only (e.g. page locked) — block Enter too, not
+        // just the grayed-out button.
+        if (disableSend) return;
+
         // Get instant values from stores at trigger time
         const fileStore = useFileStore.getState();
         const currentFileList = fileChatSelectors.chatUploadFileList(fileStore);
@@ -335,7 +365,7 @@ const ChatInput = memo<ChatInputProps>(
         // Fire and forget - send with captured message
         await sendMessage({ editorData, files: currentFileList, message, pageSelections });
       },
-      [sendMessage, disableQueue, isInputLoading],
+      [sendMessage, disableQueue, disableSend, isInputLoading],
     );
 
     const sendButtonProps: SendButtonProps = {
@@ -386,6 +416,7 @@ const ChatInput = memo<ChatInputProps>(
           <DesktopChatInput
             actionBarStyle={actionBarStyle}
             borderRadius={12}
+            compact={compact}
             controlBarSlot={controlBarSlot}
             extraActionItems={extraActionItems}
             hidden={hasPendingInterventions}

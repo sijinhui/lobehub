@@ -5,8 +5,8 @@
   "features.agentSelfIteration.title": "Agenten-Selbstiteration",
   "features.assistantMessageGroup.desc": "Agenten-Nachrichten und deren Tool-Ergebnisse gemeinsam anzeigen",
   "features.assistantMessageGroup.title": "Agenten-Nachrichten gruppieren",
-  "features.gatewayMode.desc": "Führt Agentenaufgaben über die Gateway-WebSocket-Verbindung auf dem Server aus, statt sie lokal auszuführen. Ermöglicht eine schnellere Ausführung und verringert die Client-Ressourcennutzung.",
-  "features.gatewayMode.title": "Serverseitige Agentenausführung (Gateway)",
+  "features.fleet.desc": "Zeigt den Fleet-Eintrag in der Titelleiste an – ein nebeneinander angeordnetes Dashboard aller laufenden Aufgaben über Ihre Agenten hinweg.",
+  "features.fleet.title": "Flottenansicht",
   "features.groupChat.desc": "Koordination von Gruppenchats mit mehreren Agenten aktivieren.",
   "features.groupChat.title": "Gruppenchat (Multi-Agenten)",
   "features.imessage.desc": "Verbinden Sie Agenten mit iMessage über die lokale LobeHub Desktop BlueBubbles-Bridge.",
@@ -15,5 +15,7 @@
   "features.inputMarkdown.title": "Markdown-Darstellung im Eingabefeld",
   "features.platformAgent.desc": "Zeigt den Eintrag \"Agent verbinden\" im Erstellungsmenü an. Verbundene Agenten (z. B. OpenClaw, Hermes) laufen auf Ihren eigenen Geräten und kommunizieren über LH Connect zurück.",
   "features.platformAgent.title": "Agent verbinden",
+  "features.taskVerify.desc": "Fügen Sie einen Abschnitt zur Lieferannahme in die Aufgabenbeschreibung hinzu: Beschreiben Sie die Annahme in einem Satz und lassen Sie die KI bearbeitbare Überprüfungskriterien erstellen.",
+  "features.taskVerify.title": "Aufgabenlieferung und -annahme",
   "title": "Labs"
 }

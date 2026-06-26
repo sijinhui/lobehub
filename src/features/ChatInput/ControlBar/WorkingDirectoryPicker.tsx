@@ -9,11 +9,13 @@ import {
   FolderIcon,
   FolderOpenIcon,
   FolderPlusIcon,
+  InfoIcon,
   XIcon,
 } from 'lucide-react';
 import { memo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { openAddWorkingDirModal } from '@/features/WorkingDirectory';
 import {
   resolveAgentWorkingDirectory,
   resolveTargetDeviceId,
@@ -26,8 +28,9 @@ import { useChatStore } from '@/store/chat';
 import { topicSelectors } from '@/store/chat/selectors';
 import { deviceSelectors, useDeviceStore } from '@/store/device';
 import { useElectronStore } from '@/store/electron';
+import { useUserStore } from '@/store/user';
+import { authSelectors } from '@/store/user/selectors';
 
-import { openAddWorkingDirModal } from './AddWorkingDirModal';
 import DirIcon from './DirIcon';
 import { useCommitWorkingDirectory } from './useCommitWorkingDirectory';
 import { useMigrateDeviceRecents } from './useMigrateDeviceRecents';
@@ -122,6 +125,19 @@ const styles = createStaticStyles(({ css }) => ({
     color: ${cssVar.colorTextDescription};
     text-overflow: ellipsis;
     white-space: nowrap;
+  `,
+  hint: css`
+    margin-block: 2px 4px;
+    margin-inline: 4px;
+    padding-block: 6px;
+    padding-inline: 8px;
+    border-radius: ${cssVar.borderRadius};
+
+    font-size: 12px;
+    line-height: 1.5;
+    color: ${cssVar.colorTextSecondary};
+
+    background: ${cssVar.colorFillQuaternary};
   `,
   removeBtn: css`
     cursor: pointer;
@@ -246,12 +262,18 @@ const WorkingDirectoryPicker = memo<WorkingDirectoryPickerProps>(({ agentId }) =
   const { t } = useTranslation('device');
   const [open, setOpen] = useState(false);
 
-  // Populate the device store (SWR dedupes across callers).
-  useDeviceStore((s) => s.useFetchDevices)();
+  // Populate the device store (SWR dedupes across callers). Devices sit behind an
+  // authed lambda procedure, so only fetch once signed in (desktop always fetches).
+  const isLogin = useUserStore(authSelectors.isLogin);
+  useDeviceStore((s) => s.useFetchDevices)(isLogin || isDesktop);
   // One-time fold of legacy localStorage recents into device.workingDirs.
   useMigrateDeviceRecents();
 
   const agencyConfig = useAgentStore(agentByIdSelectors.getAgencyConfigById(agentId));
+  // Derive hetero-ness from the agencyConfig already in hand — `heterogeneousProvider`
+  // is exactly what `isAgentHeterogeneousById` checks, so a second store subscription
+  // would only be redundant binding.
+  const isHeterogeneous = !!agencyConfig?.heterogeneousProvider;
   const currentDeviceId = useElectronStore((s) => s.gatewayDeviceInfo?.deviceId);
   const targetDeviceId = resolveTargetDeviceId(agencyConfig, currentDeviceId);
   // The local machine's filesystem is browsable; a remote device's is not.
@@ -301,6 +323,12 @@ const WorkingDirectoryPicker = memo<WorkingDirectoryPickerProps>(({ agentId }) =
 
   const content = (
     <Flexbox gap={4} style={{ minWidth: 280 }}>
+      {isHeterogeneous && (
+        <Flexbox horizontal align={'flex-start'} className={styles.hint} gap={6}>
+          <Icon icon={InfoIcon} size={14} style={{ flex: 'none', marginTop: 2 }} />
+          <span>{t('workingDirectory.heteroHint')}</span>
+        </Flexbox>
+      )}
       <Flexbox horizontal align={'center'} distribution={'space-between'}>
         <div className={styles.sectionTitle}>{t('workingDirectory.recent')}</div>
         {hasClearableSelection && (

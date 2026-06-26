@@ -9,14 +9,18 @@ import {
   Settings,
   ShapesIcon,
 } from 'lucide-react';
-import { type RouteObject } from 'react-router-dom';
+import { type RouteObject } from 'react-router';
 
 import {
   BusinessDesktopRoutesWithMainLayout,
   BusinessDesktopRoutesWithoutMainLayout,
 } from '@/business/client/BusinessDesktopRoutes';
+import { agentDocumentRouteMeta } from '@/features/AgentDocumentPage/routeMeta';
 import { taskRouteMeta, tasksRouteMeta } from '@/features/AgentTasks/routeMeta';
+import { fleetRouteMeta } from '@/features/Fleet/routeMeta';
 import { pageRouteMeta } from '@/features/Pages/routeMeta';
+import { verifyRouteMeta } from '@/features/Verify/routeMeta';
+import { workspaceHomeRouteMeta } from '@/features/Workspace/routeMeta';
 import { agentRouteMeta } from '@/routes/(main)/agent/features/routeMeta';
 import { groupRouteMeta } from '@/routes/(main)/group/features/routeMeta';
 import { settingsRouteMeta } from '@/routes/(main)/settings/features/routeMeta';
@@ -26,6 +30,11 @@ import { SettingsTabs } from '@/store/global/initialState';
 import { dynamicElement, dynamicLayout, ErrorBoundary, redirectElement } from '@/utils/router';
 
 const agentChatElement = dynamicElement(() => import('@/routes/(main)/agent'), 'Desktop > Chat');
+
+const groupChatElement = dynamicElement(
+  () => import('@/routes/(main)/group'),
+  'Desktop > Agent Group',
+);
 
 /**
  * Children shared between the root tree (`/`) and the workspace tree
@@ -64,6 +73,23 @@ export const sharedMainAreaChildren: RouteObject[] = [
             ),
           },
           {
+            children: [
+              {
+                element: dynamicElement(
+                  () => import('@/routes/(main)/agent/docs/[docId]'),
+                  'Desktop > Chat > Document',
+                ),
+                handle: { meta: agentDocumentRouteMeta },
+                path: ':docId',
+              },
+            ],
+            element: dynamicLayout(
+              () => import('@/routes/(main)/agent/docs/_layout'),
+              'Desktop > Chat > DocumentLayout',
+            ),
+            path: 'docs',
+          },
+          {
             element: dynamicElement(
               () => import('@/routes/(main)/agent/profile'),
               'Desktop > Chat > Profile',
@@ -86,6 +112,14 @@ export const sharedMainAreaChildren: RouteObject[] = [
           },
           {
             element: dynamicElement(
+              () => import('@/routes/(main)/agent/tasks'),
+              'Desktop > Chat > Tasks',
+            ),
+            handle: { meta: tasksRouteMeta },
+            path: 'tasks',
+          },
+          {
+            element: dynamicElement(
               () => import('@/routes/(main)/agent/task/[taskId]'),
               'Desktop > Chat > Task Detail',
             ),
@@ -104,6 +138,14 @@ export const sharedMainAreaChildren: RouteObject[] = [
     path: 'agent',
   },
 
+  // Fleet view (side-by-side agent dashboard)
+  {
+    element: dynamicElement(() => import('@/routes/(main)/fleet'), 'Desktop > Fleet'),
+    errorElement: <ErrorBoundary />,
+    handle: { meta: fleetRouteMeta },
+    path: 'fleet',
+  },
+
   // Group chat routes
   {
     children: [
@@ -114,7 +156,7 @@ export const sharedMainAreaChildren: RouteObject[] = [
       {
         children: [
           {
-            element: dynamicElement(() => import('@/routes/(main)/group'), 'Desktop > Agent Group'),
+            element: groupChatElement,
             handle: { meta: groupRouteMeta },
             index: true,
           },
@@ -124,6 +166,11 @@ export const sharedMainAreaChildren: RouteObject[] = [
               'Desktop > Agent Group > Profile',
             ),
             path: 'profile',
+          },
+          {
+            element: groupChatElement,
+            handle: { meta: groupRouteMeta },
+            path: ':topicId',
           },
         ],
         element: dynamicLayout(
@@ -723,6 +770,7 @@ export const desktopRoutes: RouteObject[] = [
           // the outer main layout (mirrors how `/` index is empty here). Adding
           // an element would render Home twice on top of `DesktopHomeLayout`.
           {
+            handle: { meta: workspaceHomeRouteMeta },
             index: true,
           },
           ...sharedMainAreaChildren,
@@ -831,6 +879,13 @@ export const desktopRoutes: RouteObject[] = [
                     ),
                     path: 'storage',
                   },
+                  {
+                    element: dynamicElement(
+                      () => import('@/routes/(main)/[workspaceSlug]/settings/devices'),
+                      'Desktop > Workspace > Settings > Devices',
+                    ),
+                    path: 'devices',
+                  },
                 ],
                 element: dynamicLayout(
                   () => import('@/routes/(main)/[workspaceSlug]/settings/_content-layout'),
@@ -918,6 +973,14 @@ export const desktopRoutes: RouteObject[] = [
     element: dynamicElement(() => import('@/routes/verify-im'), 'Desktop > VerifyIm'),
     errorElement: <ErrorBoundary />,
     path: '/verify-im',
+  },
+
+  // Standalone verification-report viewer (outside main layout)
+  {
+    element: dynamicElement(() => import('@/routes/verify/[runId]'), 'Desktop > VerifyReport'),
+    errorElement: <ErrorBoundary />,
+    handle: { meta: verifyRouteMeta },
+    path: '/verify/:runId',
   },
 
   // Devtools route (outside main layout, dev-only)

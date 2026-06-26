@@ -1,10 +1,10 @@
 import { gptImage1Schema, gptImage2Schema } from '../const/imageParameters';
 import type {
+  AIASRModelCard,
   AIChatModelCard,
   AIEmbeddingModelCard,
   AIImageModelCard,
   AIRealtimeModelCard,
-  AISTTModelCard,
   AITTSModelCard,
   AIVideoModelCard,
 } from '../types/aiModel';
@@ -1702,7 +1702,7 @@ export const openaiTTSModels: AITTSModelCard[] = [
 ];
 
 // Speech recognition models
-export const openaiSTTModels: AISTTModelCard[] = [
+export const openaiASRModels: AIASRModelCard[] = [
   {
     description:
       'A general speech recognition model supporting multilingual ASR, speech translation, and language identification.',
@@ -1718,7 +1718,7 @@ export const openaiSTTModels: AISTTModelCard[] = [
         },
       ],
     },
-    type: 'stt',
+    type: 'asr',
   },
   {
     contextWindowTokens: 16_000,
@@ -1734,7 +1734,7 @@ export const openaiSTTModels: AISTTModelCard[] = [
         { name: 'textOutput', rate: 10, strategy: 'fixed', unit: 'millionTokens' },
       ],
     },
-    type: 'stt',
+    type: 'asr',
   },
   {
     contextWindowTokens: 16_000,
@@ -1750,7 +1750,7 @@ export const openaiSTTModels: AISTTModelCard[] = [
         { name: 'textOutput', rate: 5, strategy: 'fixed', unit: 'millionTokens' },
       ],
     },
-    type: 'stt',
+    type: 'asr',
   },
 ];
 
@@ -1997,7 +1997,7 @@ export const allModels = [
   ...openaiChatModels,
   ...openaiEmbeddingModels,
   ...openaiTTSModels,
-  ...openaiSTTModels,
+  ...openaiASRModels,
   ...openaiImageModels,
   ...openaiRealtimeModels,
   ...openaiVideoModels,

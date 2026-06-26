@@ -63,6 +63,14 @@ export interface ExecAgentAppContext {
   defaultTaskAssigneeAgentId?: string;
   /** Current document ID for page-scoped conversations */
   documentId?: string | null;
+  /**
+   * When scope is 'agent_builder', the ID of the agent being edited (i.e. the
+   * left-sidebar agent the user opened AgentBuilder for). The AgentBuilder
+   * builtin runs under its own `agentId`; this field carries the *target* so
+   * server-side tool executors update the correct agent rather than the builder
+   * itself.
+   */
+  editingAgentId?: string;
   /** Group ID for group chat */
   groupId?: string | null;
   /**
@@ -78,6 +86,13 @@ export interface ExecAgentAppContext {
    * recursive sub-agent dispatch.
    */
   isSubAgent?: boolean;
+  /**
+   * Orchestration role of the agent for this group run. `'supervisor'` for the
+   * group's coordinating agent (execGroupAgent), `'member'` for delegated members
+   * (execAgentMember). Stamped onto the assistant message's
+   * `metadata.orchestrationRole` so the role snapshot persists for rendering.
+   */
+  orchestrationRole?: 'supervisor' | 'member';
   /** Scope identifier */
   scope?: string | null;
   /** Session ID */
