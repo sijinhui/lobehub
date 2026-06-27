@@ -16,6 +16,7 @@ import { TaskIdentifier } from '@lobechat/builtin-tool-task';
 import { builtinTools, manualModeExcludeToolIds } from '@lobechat/builtin-tools';
 import { LOADING_FLAT } from '@lobechat/const';
 import type {
+  AgentGroupConfig,
   AgentManagementContext,
   BotPlatformContext,
   LobeToolManifest,
@@ -51,6 +52,7 @@ import { AgentModel } from '@/database/models/agent';
 import { AgentOperationModel } from '@/database/models/agentOperation';
 import { AgentSkillModel } from '@/database/models/agentSkill';
 import { AiModelModel } from '@/database/models/aiModel';
+import { ChatGroupModel } from '@/database/models/chatGroup';
 import { ConnectorModel } from '@/database/models/connector';
 import { ConnectorToolModel } from '@/database/models/connectorTool';
 import { DeviceModel } from '@/database/models/device';
@@ -177,6 +179,72 @@ const isVisualUnderstandingConfigured = () => {
     // The env proxy rejects server-only keys in client-like runtimes; treat that as disabled.
     return false;
   }
+};
+
+/**
+ * Build the multi-agent group context from a group's member roster, mirroring
+ * the client `contextEngineering.ts` `agentGroup` build. Carries every member's
+ * real `agt_*` ID so the supervisor dispatches members by ID instead of role
+ * name (role names don't resolve → "Agent member(s) failed to start."). Resolves
+ * the responding agent's own role/name so GroupContextInjector marks it with
+ * `you="true"` and the orchestration filter activates for participants.
+ */
+const buildGroupAgentContext = (
+  currentAgentId: string,
+  group: { content?: string | null; title?: string | null } | undefined,
+  roster: Array<{ agentId: string; role: string | null; title: string | null }>,
+): AgentGroupConfig | undefined => {
+  if (roster.length === 0) return undefined;
+
+  const agentMap: AgentGroupConfig['agentMap'] = {};
+  const members: NonNullable<AgentGroupConfig['members']> = [];
+  let currentAgentName: string | undefined;
+  let currentAgentRole: 'supervisor' | 'participant' | undefined;
+
+  for (const member of roster) {
+    const role = member.role === 'supervisor' ? 'supervisor' : 'participant';
+    const name = member.title?.trim() || 'Untitled Agent';
+    agentMap[member.agentId] = { name, role };
+    members.push({ id: member.agentId, name, role });
+
+    if (member.agentId === currentAgentId) {
+      currentAgentName = name;
+      currentAgentRole = role;
+    }
+  }
+
+  return {
+    agentMap,
+    currentAgentId,
+    currentAgentName,
+    currentAgentRole,
+    groupTitle: group?.title || undefined,
+    members,
+    systemPrompt: group?.content || undefined,
+  };
+};
+
+/**
+ * Bot-conversation fallback: a single bot agent has no real group, so build a
+ * degenerate one-member context purely to give it its `<group_context>`
+ * identity block. Only used when there is no `groupId`.
+ */
+const buildBotConversationGroupContext = (
+  currentAgentId: string,
+  agentConfig: { description?: unknown; title?: unknown } | undefined,
+): AgentGroupConfig => {
+  const title = agentConfig?.title;
+  const description = agentConfig?.description;
+  const name = typeof title === 'string' && title.trim() ? title.trim() : 'Current Agent';
+
+  return {
+    agentMap: { [currentAgentId]: { name, role: 'participant' } },
+    currentAgentId,
+    currentAgentName: name,
+    currentAgentRole: 'participant',
+    members: [{ id: currentAgentId, name, role: 'participant' }],
+    systemPrompt: typeof description === 'string' ? description : undefined,
+  };
 };
 
 /**
@@ -1187,7 +1255,7 @@ export class AiAgentService {
         // `topics.groupId`), so the conversation silently "disappears" from the
         // group. execGroupAgent normally pre-creates the topic, but any path
         // that reaches execAgent without a topicId (e.g. the async/queue run)
-        // must carry the groupId through too. (LOBE-10604 / LOBE-10627)
+        // must carry the groupId through too (group topic sidebar + ownership fix).
         groupId: appContext?.groupId,
         metadata,
         title:
@@ -1281,7 +1349,7 @@ export class AiAgentService {
           files: runAttachments.fileIds,
           // Group reads filter on messages.groupId (MessageModel.query group
           // branch), so a group turn must stamp groupId or the message never
-          // shows when the topic is reopened. (LOBE-10604 / LOBE-10627)
+          // shows when the topic is reopened (group topic sidebar + ownership fix).
           groupId: appContext?.groupId ?? undefined,
           metadata: requestTriggerMetadata,
           role: 'user',
@@ -1846,6 +1914,9 @@ export class AiAgentService {
     const agentMemoryEnabled = agentConfig.chatConfig?.memory?.enabled;
     let globalMemoryEnabled = agentMemoryEnabled ?? false;
     let userTimezone: string | undefined;
+    // Resolved once below (alongside the group-tool authorization fetch) and
+    // forwarded into op metadata for the per-step context engine.
+    let operationAgentGroup: AgentGroupConfig | undefined;
     try {
       const userModel = new UserModel(this.db, this.userId);
       const settings = await userModel.getUserSettings();
@@ -2199,6 +2270,40 @@ export class AiAgentService {
         activeDeviceId ?? 'none',
       );
 
+      // Resolve the operation's group context ONCE here and snapshot it into op
+      // metadata below — the per-step context engine reads it back without a DB
+      // lookup, mirroring agentConfig/botContext. The same roster fetch also
+      // authorizes the group-orchestration toolset.
+      let isGroupSupervisor = false;
+      if (appContext?.groupId) {
+        const chatGroupModel = new ChatGroupModel(this.db, this.userId, this.workspaceId);
+        const [group, roster] = await Promise.all([
+          chatGroupModel.findById(appContext.groupId),
+          chatGroupModel.getGroupAgentsWithMeta(appContext.groupId),
+        ]);
+
+        // `appContext.orchestrationRole` is client-supplied (execGroupAgent stamps
+        // it for whatever agentId the caller passed), so it must NOT alone
+        // authorize the group-orchestration toolset — otherwise any run marked
+        // `{ orchestrationRole: 'supervisor', groupId }` could dispatch members.
+        // Verify against the persisted, ownership-scoped membership instead.
+        if (appContext.orchestrationRole === 'supervisor') {
+          isGroupSupervisor = roster.some(
+            (member) => member.agentId === resolvedAgentId && member.role === 'supervisor',
+          );
+          if (!isGroupSupervisor)
+            log(
+              'execAgent: orchestrationRole=supervisor but agent %s is not the supervisor of group %s — denying group tools',
+              resolvedAgentId,
+              appContext.groupId,
+            );
+        }
+
+        operationAgentGroup = buildGroupAgentContext(resolvedAgentId, group, roster);
+      } else if (botContext) {
+        operationAgentGroup = buildBotConversationGroupContext(resolvedAgentId, agentConfig);
+      }
+
       const toolsEngine = createServerAgentToolsEngine(toolsContext, {
         additionalManifests: [
           ...lobehubSkillManifests,
@@ -2223,6 +2328,15 @@ export class AiAgentService {
         globalMemoryEnabled,
         hasEnabledKnowledgeBases,
         isBotConversation,
+        isGroupSupervisor,
+        // Context-aware builtin manifests: inside a sub-agent (or group) run,
+        // lobe-agent drops `callSubAgent` so the model can't recurse into nested
+        // sub-agents (which the runtime rejects, looping until the inactivity
+        // watchdog kills the op). Mirrors the frontend `createAgentToolsEngine`.
+        manifestContext: {
+          isSubAgent: appContext?.isSubAgent,
+          scope: appContext?.scope ?? undefined,
+        },
         model,
         provider,
       });
@@ -3000,6 +3114,7 @@ export class AiAgentService {
       const result = await this.agentRuntimeService.createOperation({
         activeDeviceId,
         agentConfig,
+        agentGroup: operationAgentGroup,
         deviceSystemInfo: Object.keys(deviceSystemInfo).length > 0 ? deviceSystemInfo : undefined,
         executionPlan,
         userTimezone,
@@ -3026,6 +3141,10 @@ export class AiAgentService {
           documentId: appContext?.documentId,
           groupId: appContext?.groupId,
           isSubAgent: appContext?.isSubAgent,
+          // Persist the orchestration role on state.metadata so the
+          // inactivity-watchdog abandon path can distinguish an isolated group
+          // member ('member') from a genuine callSubAgent child.
+          orchestrationRole: appContext?.orchestrationRole,
           scope: appContext?.scope,
           sourceMessageId: userMessageRecord?.id ?? parentMessageId ?? undefined,
           taskId: operationTaskId,
@@ -3281,6 +3400,9 @@ export class AiAgentService {
             }),
           isSubAgent: true,
           logScope: 'execVirtualSubAgent',
+          // Tag the op as a group member so the abandon path routes its parent
+          // resume through the group bridge (its own timeout), not the sub-agent one.
+          orchestrationRole: 'member',
           resumeParentOnComplete: true,
         },
       );
@@ -3432,6 +3554,15 @@ export class AiAgentService {
       bridgeHookFactory?: (threadId: string) => AgentHook;
       isSubAgent: boolean;
       logScope: 'execSubAgent' | 'execVirtualSubAgent';
+      /**
+       * Marks the run's orchestration role on its operation metadata. Isolated
+       * group members pass `'member'` so the inactivity-watchdog abandon path can
+       * tell them apart from genuine `callSubAgent` children — both share
+       * `isSubAgent: true` and an isolation thread, but a member's parent is
+       * resumed through the group K=N bridge (via its own group-member timeout),
+       * NOT `completeSubAgentBridge`.
+       */
+      orchestrationRole?: 'member';
       resumeParentOnComplete?: boolean;
     },
   ): Promise<ExecSubAgentResult> {
@@ -3519,6 +3650,7 @@ export class AiAgentService {
     const appContext: NonNullable<InternalExecAgentParams['appContext']> = {
       groupId,
       isSubAgent: options.isSubAgent,
+      orchestrationRole: options.orchestrationRole,
       threadId: thread.id,
       topicId,
     };

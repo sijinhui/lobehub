@@ -10,7 +10,13 @@ import { WebBrowsingManifest } from '@lobechat/builtin-tool-web-browsing';
 import { alwaysOnToolIds, chatModeAllowedToolIds, defaultToolIds } from '@lobechat/builtin-tools';
 import { createEnableChecker, type PluginEnableChecker } from '@lobechat/context-engine';
 import { ToolsEngine } from '@lobechat/context-engine';
-import { type ChatCompletionTool, type ToolManifest, type WorkingModel } from '@lobechat/types';
+import {
+  type BuiltinToolManifest,
+  type BuiltinToolResolveContext,
+  type ChatCompletionTool,
+  type ToolManifest,
+  type WorkingModel,
+} from '@lobechat/types';
 
 import type { ConnectorToolPermission } from '@/database/schemas';
 import { isToolAvailableInCurrentEnv } from '@/helpers/toolAvailability';
@@ -42,7 +48,14 @@ export interface ToolsEngineConfig {
   /** Custom enable checker for plugins */
   enableChecker?: PluginEnableChecker;
   /** Transform manifests before passing to ToolsEngine (e.g., to remove sandbox-dependent APIs) */
-  manifestTransform?: (manifests: LobeChatPluginManifest[]) => LobeChatPluginManifest[];
+  manifestTransform?: (manifests: ToolManifest[]) => ToolManifest[];
+  /**
+   * Runtime context for context-aware builtin manifests. When provided, each
+   * builtin tool with a `resolveManifest` produces its manifest for this context
+   * (trimming APIs or opting out via `null`). Omit for context-free callers
+   * (e.g. UI token estimation) — they get the full static manifests.
+   */
+  manifestContext?: BuiltinToolResolveContext;
 }
 
 /**
@@ -86,7 +99,7 @@ const dropInvalidManifests = (manifests: (ToolManifest | undefined)[], source: s
  * Initialize ToolsEngine with current manifest schemas and configurable options
  */
 export const createToolsEngine = (config: ToolsEngineConfig = {}): ToolsEngine => {
-  const { enableChecker, additionalManifests = [], defaultToolIds, manifestTransform } = config;
+  const { enableChecker, additionalManifests = [], defaultToolIds, manifestContext, manifestTransform } = config;
 
   const toolStoreState = getToolStoreState();
 
@@ -123,12 +136,23 @@ export const createToolsEngine = (config: ToolsEngineConfig = {}): ToolsEngine =
         : m;
     });
 
-  // Get all builtin tool manifests
-  const builtinManifests = toolStoreState.builtinTools.map((tool) => tool.manifest as ToolManifest);
+  // Get all builtin tool manifests. When a manifest context is supplied (agent
+  // runtime path), context-aware tools resolve their manifest for it — trimming
+  // APIs (e.g. lobe-agent hides callSubAgent in groups) or opting out via `null`.
+  // Context-free callers fall back to the full static manifest.
+  const builtinManifests = toolStoreState.builtinTools
+    .map((tool) =>
+      manifestContext && tool.resolveManifest
+        ? tool.resolveManifest(manifestContext)
+        : tool.manifest,
+    )
+    .filter((m): m is BuiltinToolManifest => !!m) as ToolManifest[];
 
   // Get Composio tool manifests
   const composioTools = composioStoreSelectors.composioAsLobeTools(toolStoreState);
-  const composioManifests = composioTools.map((tool) => tool.manifest as ToolManifest).filter(Boolean);
+  const composioManifests = composioTools
+    .map((tool) => tool.manifest as ToolManifest)
+    .filter(Boolean);
 
   // Get LobeHub Skill tool manifests
   const lobehubSkillTools = lobehubSkillStoreSelectors.lobehubSkillAsLobeTools(toolStoreState);
@@ -162,6 +186,8 @@ export const createAgentToolsEngine = (
   workingModel: WorkingModel,
   /** Runtime-resolved plugin IDs (from agentConfigResolver), may include tools beyond the active agent */
   pluginIds?: string[],
+  /** Conversation context for context-aware builtin manifests (scope, isSubAgent). */
+  manifestContext?: BuiltinToolResolveContext,
 ) => {
   const searchConfig = getSearchConfig(workingModel.model, workingModel.provider);
   const agentState = getAgentStoreState();
@@ -206,7 +232,7 @@ export const createAgentToolsEngine = (
   // When cloud sandbox is disabled, strip sandbox-dependent APIs from lobe-skills
   const SANDBOX_DEPENDENT_APIS = new Set(['runCommand', 'execScript', 'exportFile']);
   const manifestTransform = !isCloudSandboxEnabled
-    ? (manifests: LobeChatPluginManifest[]) =>
+    ? (manifests: ToolManifest[]) =>
         manifests.map((m) => {
           if (m.identifier !== SkillsIdentifier) return m;
           return {
@@ -218,6 +244,7 @@ export const createAgentToolsEngine = (
 
   return createToolsEngine({
     defaultToolIds: isChatMode ? chatModeAllowedToolIds : defaultToolIds,
+    manifestContext,
     enableChecker: createEnableChecker({
       allowExplicitActivation: !isChatMode,
       platformFilter: ({ pluginId }) => {
