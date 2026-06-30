@@ -9,8 +9,8 @@ import {
 } from '@lobechat/prompts';
 import { isCommandPressed } from '@lobechat/utils';
 import type { IEditor } from '@lobehub/editor';
-import { INSERT_MENTION_COMMAND, ReactAutoCompletePlugin, ReactMathPlugin } from '@lobehub/editor';
-import { Editor, FloatMenu, useEditorState } from '@lobehub/editor/react';
+import { INSERT_MENTION_COMMAND, ReactAutoCompletePlugin } from '@lobehub/editor';
+import { Editor, useEditorState } from '@lobehub/editor/react';
 import { combineKeys } from '@lobehub/ui';
 import { css, cx } from 'antd-style';
 import Fuse from 'fuse.js';
@@ -35,6 +35,7 @@ import {
 
 import { useAgentId } from '../hooks/useAgentId';
 import { useChatInputDraft } from '../hooks/useChatInputDraft';
+import { useChatInputHistory } from '../hooks/useChatInputHistory';
 import { useChatInputStore, useStoreApi } from '../store';
 import {
   INSERT_ACTION_TAG_COMMAND,
@@ -42,8 +43,6 @@ import {
   useSlashActionItems,
 } from './ActionTag';
 import { createInputCompletionError, isInputCompletionAbortError } from './inputCompletionError';
-import { createMentionMenu } from './MentionMenu';
-import type { MentionMenuState } from './MentionMenu/types';
 import { mentionFilledClassName } from './mentionStyle';
 import Placeholder, { type PlaceholderVariant } from './Placeholder';
 import { CHAT_INPUT_EMBED_PLUGINS, createChatInputRichPlugins } from './plugins';
@@ -73,6 +72,7 @@ const InputEditor = memo<{
     expand,
     slashPlacement,
     isInputCompletionEnabled,
+    isInputHistoryEnabled,
     isMentionEnabled,
     isSlashEnabled,
   ] = useChatInputStore((s) => [
@@ -83,6 +83,7 @@ const InputEditor = memo<{
     s.expand,
     s.slashPlacement ?? 'top',
     s.feature?.inputCompletion ?? true,
+    s.feature?.inputHistory ?? true,
     s.feature?.mention ?? true,
     s.feature?.slash ?? true,
   ]);
@@ -98,12 +99,19 @@ const InputEditor = memo<{
   const { compositionProps, isComposingRef } = useIMECompositionEvent();
 
   const shouldSendOnEnter = useEnterToSend();
+  const getMarkdownContent = useCallback(
+    () => storeApi.getState().getMarkdownContent(),
+    [storeApi],
+  );
+  const inputHistory = useChatInputHistory({
+    editor,
+    enabled: isInputHistoryEnabled,
+    getMarkdownContent,
+    isComposingRef,
+  });
 
   // --- Category-based mention system ---
   const categories = useMentionCategories();
-  const stateRef = useRef<MentionMenuState>({ isSearch: false, matchingString: '' });
-  const categoriesRef = useRef(categories);
-  categoriesRef.current = categories;
 
   // Get agent's model info for vision support check and handle paste upload
   const agentId = useAgentId();
@@ -131,7 +139,6 @@ const InputEditor = memo<{
       search: { leadOffset: number; matchingString: string; replaceableString: string } | null,
     ) => {
       if (search?.matchingString) {
-        stateRef.current = { isSearch: true, matchingString: search.matchingString };
         const [localFileItems, mentionItems] = await Promise.all([
           searchLocalFiles(search.matchingString),
           Promise.resolve(fuse.search(search.matchingString).map((r) => r.item)),
@@ -139,13 +146,10 @@ const InputEditor = memo<{
 
         return [...localFileItems, ...mentionItems];
       }
-      stateRef.current = { isSearch: false, matchingString: '' };
       return [...allMentionItems];
     },
     [allMentionItems, fuse, searchLocalFiles],
   );
-
-  const MentionMenuComp = useMemo(() => createMentionMenu(stateRef, categoriesRef), []);
 
   const enableMention = isMentionEnabled && (allMentionItems.length > 0 || enableLocalFileMention);
   const heterogeneousName = heterogeneousType
@@ -410,10 +414,9 @@ const InputEditor = memo<{
             markdownWriter: mentionMarkdownWriter,
             maxLength: 50,
             onSelect: mentionOnSelect,
-            renderComp: MentionMenuComp,
           }
         : undefined,
-    [enableMention, mentionItemsFn, mentionMarkdownWriter, mentionOnSelect, MentionMenuComp],
+    [enableMention, mentionItemsFn, mentionMarkdownWriter, mentionOnSelect],
   );
 
   const slashOption = useMemo(
@@ -424,23 +427,14 @@ const InputEditor = memo<{
   const richRenderProps = useMemo(() => {
     const basePlugins = !enableRichRender
       ? CHAT_INPUT_EMBED_PLUGINS
-      : createChatInputRichPlugins({
-          linkPlugin: false,
-          mathPlugin: Editor.withProps(ReactMathPlugin, {
-            renderComp: expand
-              ? undefined
-              : (props) => (
-                  <FloatMenu {...props} getPopupContainer={() => (slashMenuRef as any)?.current} />
-                ),
-          }),
-        });
+      : createChatInputRichPlugins({ linkPlugin: false });
 
     const plugins = autoCompletePlugin ? [...basePlugins, autoCompletePlugin] : basePlugins;
 
     return !enableRichRender
       ? { enablePasteMarkdown: false, markdownOption: false, plugins }
       : { plugins };
-  }, [enableRichRender, expand, slashMenuRef, autoCompletePlugin]);
+  }, [enableRichRender, autoCompletePlugin]);
 
   const handleEditorInit = useCallback(
     (editor: IEditor) => {
@@ -471,6 +465,7 @@ const InputEditor = memo<{
       content={''}
       editable={canCreateContent}
       editor={editor}
+      getPopupContainer={() => (slashMenuRef as any)?.current ?? null}
       {...{ slashPlacement }}
       {...richRenderProps}
       mentionOption={mentionOption}
@@ -493,10 +488,12 @@ const InputEditor = memo<{
       onInit={handleEditorInit}
       onBlur={() => {
         disableScope(HotkeyEnum.AddUserMessage);
+        inputHistory.handleEditorBlur();
         saveDraftDebounced.flush();
       }}
       onChange={() => {
         updateMarkdownContent();
+        inputHistory.handleEditorChange();
         saveDraftDebounced();
       }}
       onCompositionStart={({ event }) => {
@@ -524,6 +521,9 @@ const InputEditor = memo<{
       }}
       onFocus={() => {
         enableScope(HotkeyEnum.AddUserMessage);
+      }}
+      onKeyDown={({ event }) => {
+        if (inputHistory.handleKeyDown(event)) return true;
       }}
       onPressEnter={({ event: e }) => {
         if (e.shiftKey || isComposingRef.current) return;
