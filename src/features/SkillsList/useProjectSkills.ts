@@ -1,4 +1,4 @@
-import { type ListProjectSkillsResult, type ProjectSkillItem } from '@lobechat/electron-client-ipc';
+import type { ListProjectSkillsResult, ProjectSkillItem } from '@lobechat/electron-client-ipc';
 import { EyeIcon, PencilIcon, Trash2Icon } from 'lucide-react';
 import path from 'pathe';
 import { useMemo } from 'react';
@@ -10,24 +10,30 @@ import { useChatStore } from '@/store/chat';
 import type { SkillListItem, SkillRowAction } from './SkillsList';
 
 export interface UseProjectSkillsResult {
+  deviceItems: SkillListItem[];
+  /** The thrown error from the SWR scan, if it failed. */
+  error: unknown;
   /**
-   * Per-row actions for project skills: "view" opens the SKILL.md (local only —
-   * a remote device's filesystem isn't reachable by the local viewer), while
-   * rename / delete are stubbed (disabled) until the filesystem-mutation IPC
+   * Per-row actions for filesystem skills: "view" opens the SKILL.md (local
+   * only — a remote device's filesystem isn't reachable by the local viewer),
+   * while rename / delete are stubbed (disabled) until filesystem-mutation IPC
    * lands.
    */
   getRowActions: (item: SkillListItem) => SkillRowAction[];
   isLoading: boolean;
   items: SkillListItem[];
+  /** Retry the failed scan (SWR `mutate`). */
+  mutate: () => void;
   onOpenFile: (item: SkillListItem, relativePath: string) => void;
   onOpenSkill: (item: SkillListItem) => void;
+  projectItems: SkillListItem[];
   raw: ListProjectSkillsResult | undefined;
 }
 
 /**
- * Shared SWR + handlers for filesystem-backed project skills under
- * `.agents/skills/` / `.claude/skills/` in `workingDirectory`. Powers both
- * the hetero `SkillsGroup` and the homogeneous `ProjectLevelSkills` section.
+ * Shared SWR + handlers for filesystem-backed skills. Project skills live
+ * under `.agents/skills` / `.claude/skills` in `workingDirectory`; device
+ * skills live under those directories in the execution device's home.
  *
  * `deviceId` picks the transport: when set, the scan runs on that remote device
  * via the `device.listProjectSkills` RPC; otherwise it goes through local
@@ -45,12 +51,11 @@ export const useProjectSkills = (
   const openLocalFile = useChatStore((s) => s.openLocalFile);
   const isRemote = !!deviceId;
 
-  const { data, isLoading } = useFetchProjectSkills(workingDirectory, deviceId);
+  const { data, error, isLoading, mutate } = useFetchProjectSkills(workingDirectory, deviceId);
 
-  // listProjectSkills approves `data.root` for preview. Hand that exact value
-  // back to openLocalFile so LocalFileProtocolManager.createPreviewUrl's
-  // approved-root check matches; fall back to the requested workingDirectory
-  // while the SWR fetch is in flight.
+  // listProjectSkills approves per-skill preview roots. Fall back to the
+  // requested workingDirectory while the SWR fetch is in flight or when reading
+  // legacy cached payloads without previewRoot.
   const previewRoot = data?.root || workingDirectory || '';
 
   const items = useMemo<SkillListItem[]>(
@@ -61,9 +66,14 @@ export const useProjectSkills = (
         files: skill.files,
         id: skill.skillDir,
         name: skill.name,
+        scope: skill.scope,
       })),
     [data?.skills],
   );
+
+  const projectItems = useMemo(() => items.filter((item) => item.scope !== 'device'), [items]);
+
+  const deviceItems = useMemo(() => items.filter((item) => item.scope === 'device'), [items]);
 
   const skillByDir = useMemo(() => {
     const map = new Map<string, ProjectSkillItem>();
@@ -79,7 +89,7 @@ export const useProjectSkills = (
     if (!skill) return;
     openLocalFile({
       filePath: path.join(skill.skillDir, relativePath),
-      workingDirectory: previewRoot,
+      workingDirectory: skill.previewRoot || previewRoot,
     });
   };
 
@@ -87,7 +97,7 @@ export const useProjectSkills = (
     if (isRemote) return;
     const skill = skillByDir.get(item.id);
     if (!skill) return;
-    openLocalFile({ filePath: skill.path, workingDirectory: previewRoot });
+    openLocalFile({ filePath: skill.path, workingDirectory: skill.previewRoot || previewRoot });
   };
 
   const getRowActions = (_item: SkillListItem): SkillRowAction[] => {
@@ -122,5 +132,18 @@ export const useProjectSkills = (
     ];
   };
 
-  return { getRowActions, isLoading, items, onOpenFile, onOpenSkill, raw: data };
+  return {
+    deviceItems,
+    error,
+    getRowActions,
+    isLoading,
+    items,
+    mutate: () => {
+      void mutate();
+    },
+    onOpenFile,
+    onOpenSkill,
+    projectItems,
+    raw: data,
+  };
 };

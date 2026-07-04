@@ -127,6 +127,15 @@ export interface ToolExecutionContext {
    */
   agentMember?: ServerAgentMemberRunner;
   /**
+   * Visibility of the agent executing this tool call. Resolved once per tool
+   * call in the runtime executor. Tool runtimes that persist agent side-effects
+   * (documents, tasks, etc.) forward this so private-agent output inherits
+   * private visibility and public-agent reads are gated away from private data
+   * — mirroring the `assertAgentVisibilityCompat` invariant on tasks.
+   * `null` when the agent is missing or not visible to the caller.
+   */
+  agentVisibility?: 'private' | 'public' | null;
+  /**
    * The assistant message that carries this tool call (the runtime's
    * `payload.parentMessageId`). Distinct from `messageId`, which is the source
    * *user* message. Tools that need to anchor back to the exact tool-call turn
@@ -167,11 +176,11 @@ export interface ToolExecutionContext {
   /** Agent runtime operation ID for structured tool outcome identity. */
   operationId?: string;
   /**
-   * Project-level skills (name + absolute SKILL.md path) discovered on the
-   * device filesystem. Used by the Skills runtime to load them on demand via
-   * the device gateway. Derived from the operation's skill set.
+   * Filesystem skills (name + absolute SKILL.md path) discovered on the
+   * execution device. Used by the Skills runtime to load them on demand via the
+   * device gateway. Derived from the operation's skill set.
    */
-  projectSkills?: { location: string; name: string }[];
+  projectSkills?: { location: string; name: string; source?: 'device' | 'project' }[];
   /** Conversation scope captured when the operation was created */
   scope?: string | null;
   /** Server database for LobeHub Skills execution */

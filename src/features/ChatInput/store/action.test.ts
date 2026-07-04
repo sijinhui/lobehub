@@ -1,5 +1,9 @@
 import type { IEditor } from '@lobehub/editor';
+import { KEY_ESCAPE_COMMAND } from 'lexical';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { useAgentStore } from '@/store/agent';
+import { systemAgentSelectors } from '@/store/user/selectors';
 
 import { getInputHistory } from '../inputHistoryStorage';
 import { createStore, selectors } from '.';
@@ -7,6 +11,7 @@ import { createStore, selectors } from '.';
 describe('ChatInput store actions', () => {
   beforeEach(() => {
     localStorage.clear();
+    useAgentStore.setState({ activeAgentId: undefined });
     vi.restoreAllMocks();
   });
 
@@ -32,6 +37,7 @@ describe('ChatInput store actions', () => {
       getDocument: vi.fn((type: string) => (type === 'markdown' ? 'Hello' : editorData)),
     };
     const store = createStore({
+      agentId: 'agent-1',
       editor: editor as unknown as IEditor,
       onSend: ({ clearContent }) => {
         clearContent();
@@ -40,10 +46,33 @@ describe('ChatInput store actions', () => {
 
     store.getState().handleSendButton();
 
-    expect(getInputHistory()[0]).toMatchObject({
+    expect(getInputHistory({ agentId: 'agent-1' })[0]).toMatchObject({
       json: editorData,
       markdown: 'Hello',
     });
+  });
+
+  it('records sent input in the active agent history when no agent id is provided', () => {
+    useAgentStore.setState({ activeAgentId: 'active-agent' });
+
+    const editorData = { root: { children: [{ text: 'Hello' }] } };
+    const editor = {
+      cleanDocument: vi.fn(),
+      focus: vi.fn(),
+      getDocument: vi.fn((type: string) => (type === 'markdown' ? 'Hello' : editorData)),
+    };
+    const store = createStore({
+      editor: editor as unknown as IEditor,
+      onSend: vi.fn(),
+    });
+
+    store.getState().handleSendButton();
+
+    expect(getInputHistory({ agentId: 'active-agent' })[0]).toMatchObject({
+      json: editorData,
+      markdown: 'Hello',
+    });
+    expect(getInputHistory()).toEqual([]);
   });
 
   it('does not record history when the input history feature is disabled', () => {
@@ -61,6 +90,45 @@ describe('ChatInput store actions', () => {
     store.getState().handleSendButton();
 
     expect(getInputHistory()).toEqual([]);
+    expect(editor.getDocument).not.toHaveBeenCalled();
+  });
+
+  it('clears the input-completion ghost before sending when autocomplete is enabled', () => {
+    vi.spyOn(systemAgentSelectors, 'inputCompletion').mockReturnValue({ enabled: true } as any);
+
+    const dispatchCommand = vi.fn();
+    const editor = {
+      cleanDocument: vi.fn(),
+      dispatchCommand,
+      focus: vi.fn(),
+      getDocument: vi.fn((type: string) => (type === 'markdown' ? 'Hello' : { root: {} })),
+    };
+    const store = createStore({
+      editor: editor as unknown as IEditor,
+      onSend: vi.fn(),
+    });
+
+    store.getState().handleSendButton();
+
+    expect(dispatchCommand).toHaveBeenCalledWith(KEY_ESCAPE_COMMAND, expect.any(Object));
+  });
+
+  it('does not dispatch escape on send when autocomplete is disabled', () => {
+    const dispatchCommand = vi.fn();
+    const editor = {
+      cleanDocument: vi.fn(),
+      dispatchCommand,
+      focus: vi.fn(),
+      getDocument: vi.fn((type: string) => (type === 'markdown' ? 'Hello' : { root: {} })),
+    };
+    const store = createStore({
+      editor: editor as unknown as IEditor,
+      onSend: vi.fn(),
+    });
+
+    store.getState().handleSendButton();
+
+    expect(dispatchCommand).not.toHaveBeenCalled();
   });
 
   it('does not record history when no send handler is configured', () => {
