@@ -49,6 +49,7 @@ export const useSignIn = () => {
   );
   const [form] = Form.useForm<SignInFormValues>();
   const [loading, setLoading] = useState(false);
+  const [passkeyLoading, setPasskeyLoading] = useState(false);
   // Locks the email-dispatch actions (magic link / password reset / resend) so a
   // slow network can't be double-clicked into multiple emails.
   const [sending, setSending] = useState(false);
@@ -293,6 +294,33 @@ export const useSignIn = () => {
     }
   };
 
+  const handlePasskeySignIn = async () => {
+    setPasskeyLoading(true);
+    await trackLoginOrSignupClicked({ spm: 'signin.passkey.click' });
+
+    try {
+      const callbackUrl = searchParams.get('callbackUrl') || '/';
+      const result = await signIn.passkey();
+
+      if (result.error) {
+        if (
+          !('code' in result.error) ||
+          (result.error.code !== 'AUTH_CANCELLED' && result.error.code !== 'ERROR_CEREMONY_ABORTED')
+        ) {
+          message.error(result.error.message || t('betterAuth.signin.passkeyError'));
+        }
+        return;
+      }
+
+      window.location.href = sanitizeRedirectPath(callbackUrl);
+    } catch (error) {
+      console.error('Passkey sign in error:', error);
+      message.error(t('betterAuth.signin.passkeyError'));
+    } finally {
+      setPasskeyLoading(false);
+    }
+  };
+
   const handleBackToEmail = () => {
     setStep('email');
     setEmail('');
@@ -379,6 +407,7 @@ export const useSignIn = () => {
     handleCheckUser,
     handleForgotPassword,
     handleGoToSignup,
+    handlePasskeySignIn,
     handleResendEmail,
     handleSignIn,
     handleSocialSignIn,
@@ -386,6 +415,7 @@ export const useSignIn = () => {
     lastAuthProvider,
     loading,
     oAuthSSOProviders: sortedProviders,
+    passkeyLoading,
     sending,
     sentInfo,
     serverConfigInit: enableBusinessFeatures ? true : serverConfigInit,

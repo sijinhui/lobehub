@@ -5,19 +5,25 @@ import { zstdDecompress } from 'node:zlib';
 
 import type { ExecutionSnapshot } from '../types';
 
-const decompressZstd = promisify(zstdDecompress);
-
 const REMOTE_DIR = '_remote';
 const ENV_FILE = '.env';
 const DEFAULT_DIR = '.agent-tracing';
 const ZSTD_SUFFIX = '.json.zst';
 const LEGACY_SUFFIX = '.json';
 
+function getZstdDecompress() {
+  if (typeof zstdDecompress !== 'function') {
+    throw new Error('zstd decompression requires a Node.js runtime with node:zlib zstd support.');
+  }
+
+  return promisify(zstdDecompress);
+}
+
 // Zstd frame magic number — first 4 bytes of any zstd-compressed stream.
 // https://datatracker.ietf.org/doc/html/rfc8478#section-3.1.1
 function isZstdFrame(buf: Buffer): boolean {
   return (
-    buf.length >= 4 && buf[0] === 0x28 && buf[1] === 0xb5 && buf[2] === 0x2f && buf[3] === 0xfd
+    buf.length >= 4 && buf[0] === 0x28 && buf[1] === 0xB5 && buf[2] === 0x2F && buf[3] === 0xFD
   );
 }
 
@@ -139,7 +145,7 @@ export class RemoteSnapshotStore {
     // Sniff the zstd frame magic so the body is decoded by content, not URL
     // suffix — keeps legacy `.json` snapshots working alongside compressed ones.
     const body = Buffer.from(await res.arrayBuffer());
-    const decoded = isZstdFrame(body) ? await decompressZstd(body) : body;
+    const decoded = isZstdFrame(body) ? await getZstdDecompress()(body) : body;
     const snapshot = JSON.parse(decoded.toString('utf8')) as ExecutionSnapshot;
 
     // Cache locally as plain JSON for easy inspection.

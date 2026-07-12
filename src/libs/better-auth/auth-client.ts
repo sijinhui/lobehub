@@ -1,3 +1,4 @@
+import { passkeyClient } from '@better-auth/passkey/client';
 import {
   adminClient,
   genericOAuthClient,
@@ -12,6 +13,7 @@ export const {
   changeEmail,
   linkSocial,
   oauth2,
+  passkey,
   accountInfo,
   listAccounts,
   requestPasswordReset,
@@ -21,12 +23,14 @@ export const {
   signOut,
   signUp,
   unlinkAccount,
+  useListPasskeys,
   useSession,
 } = createAuthClient({
   plugins: [
     adminClient(),
     inferAdditionalFields<typeof auth>(),
     genericOAuthClient(),
+    passkeyClient(),
     // Always include magicLinkClient - server will reject if not enabled
     magicLinkClient(),
   ],
