@@ -11,6 +11,7 @@ const mockSignInSocial = vi.hoisted(() => vi.fn());
 const mockSignInOauth2 = vi.hoisted(() => vi.fn());
 const mockSignInEmail = vi.hoisted(() => vi.fn());
 const mockSignInMagicLink = vi.hoisted(() => vi.fn());
+const mockSignInPasskey = vi.hoisted(() => vi.fn());
 const mockRequestPasswordReset = vi.hoisted(() => vi.fn());
 const mockBusinessSignin = vi.hoisted(() => ({
   getAdditionalData: vi.fn(async () => ({})),
@@ -43,6 +44,7 @@ vi.mock('@/libs/better-auth/auth-client', () => ({
     email: mockSignInEmail,
     magicLink: mockSignInMagicLink,
     oauth2: mockSignInOauth2,
+    passkey: mockSignInPasskey,
     social: mockSignInSocial,
   },
 }));
@@ -452,6 +454,61 @@ describe('useSignIn', () => {
 
       expect(mockBusinessSignin.preSocialSigninCheck).toHaveBeenCalled();
       expect(mockSignInSocial).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('handlePasskeySignIn', () => {
+    it('should redirect to the callback URL after passkey sign in', async () => {
+      mockSearchParamsGet.mockImplementation((key: string) =>
+        key === 'callbackUrl' ? '/settings/profile' : null,
+      );
+      mockSignInPasskey.mockResolvedValue({ data: { session: {}, user: {} }, error: null });
+
+      const { result } = renderHook(() => useSignIn());
+
+      await act(async () => {
+        await result.current.handlePasskeySignIn();
+      });
+
+      expect(mockSignInPasskey).toHaveBeenCalledTimes(1);
+      expect(window.location.href).toBe('/settings/profile');
+      expect(mockMessageError).not.toHaveBeenCalled();
+    });
+
+    it('should not show an error when the passkey prompt is cancelled', async () => {
+      mockSignInPasskey.mockResolvedValue({
+        data: null,
+        error: { code: 'AUTH_CANCELLED', message: 'auth cancelled', status: 400 },
+      });
+
+      const { result } = renderHook(() => useSignIn());
+
+      await act(async () => {
+        await result.current.handlePasskeySignIn();
+      });
+
+      expect(mockMessageError).not.toHaveBeenCalled();
+      expect(window.location.href).toBe('');
+    });
+
+    it('should not show an error when passkey ceremony is aborted (WebAuthn cancel)', async () => {
+      mockSignInPasskey.mockResolvedValue({
+        data: null,
+        error: {
+          code: 'ERROR_CEREMONY_ABORTED',
+          message: 'auth cancelled',
+          status: 400,
+        },
+      });
+
+      const { result } = renderHook(() => useSignIn());
+
+      await act(async () => {
+        await result.current.handlePasskeySignIn();
+      });
+
+      expect(mockMessageError).not.toHaveBeenCalled();
+      expect(window.location.href).toBe('');
     });
   });
 

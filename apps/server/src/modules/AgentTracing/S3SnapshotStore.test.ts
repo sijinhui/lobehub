@@ -5,8 +5,16 @@ import { zstdCompress, zstdDecompress } from 'node:zlib';
 import type { ExecutionSnapshot } from '@lobechat/agent-tracing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const compressZstd = promisify(zstdCompress);
-const decompressZstd = promisify(zstdDecompress);
+const compressZstd = async (input: Buffer) => {
+  if (typeof zstdCompress !== 'function') throw new Error('zstd is not supported in this Node.js runtime.');
+  return promisify(zstdCompress)(input);
+};
+
+const decompressZstd = async (input: Buffer) => {
+  if (typeof zstdDecompress !== 'function')
+    throw new Error('zstd is not supported in this Node.js runtime.');
+  return promisify(zstdDecompress)(input);
+};
 
 // Stub FileS3 with vi.fn methods so we can assert calls + return canned data.
 const uploadBuffer = vi.fn();
@@ -48,6 +56,10 @@ beforeEach(() => {
 });
 
 describe('S3SnapshotStore.save', () => {
+  it('can be imported when the current Node.js runtime lacks zstd support', () => {
+    expect(S3SnapshotStore).toBeTypeOf('function');
+  });
+
   it('writes to agent-traces/{agentId}/{topicId}/{operationId}.json.zst with zstd body', async () => {
     const store = new S3SnapshotStore();
     const snap = sampleSnapshot();
@@ -61,7 +73,7 @@ describe('S3SnapshotStore.save', () => {
     expect(Buffer.isBuffer(body)).toBe(true);
 
     // zstd frame magic: 0x28 b5 2f fd
-    expect([body[0], body[1], body[2], body[3]]).toEqual([0x28, 0xb5, 0x2f, 0xfd]);
+    expect([body[0], body[1], body[2], body[3]]).toEqual([0x28, 0xB5, 0x2F, 0xFD]);
 
     const roundtripped = JSON.parse((await decompressZstd(body)).toString('utf8'));
     expect(roundtripped).toEqual(snap);

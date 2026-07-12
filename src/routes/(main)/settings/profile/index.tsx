@@ -19,6 +19,7 @@ import ComposioAuthorizationList from './features/ComposioAuthorizationList';
 import EmailRow from './features/EmailRow';
 import FullNameRow from './features/FullNameRow';
 import InterestsRow from './features/InterestsRow';
+import PasskeyRow from './features/PasskeyRow';
 import PasswordRow from './features/PasswordRow';
 import ProfileRow from './features/ProfileRow';
 import SSOProvidersList from './features/SSOProvidersList';
@@ -106,6 +107,13 @@ const ProfileSetting = () => {
             <>
               <Divider style={{ margin: 0 }} />
               <EmailRow />
+            </>
+          )}
+
+          {isLogin && !isDesktop && (
+            <>
+              <Divider style={{ margin: 0 }} />
+              <PasskeyRow />
             </>
           )}
 

@@ -3,7 +3,7 @@ import { Alert, Button, Flexbox, Icon, Input, Text } from '@lobehub/ui';
 import { type FormInstance, type InputRef } from 'antd';
 import { Badge, Divider, Form } from 'antd';
 import { createStaticStyles } from 'antd-style';
-import { Mail } from 'lucide-react';
+import { KeyRound, Mail } from 'lucide-react';
 import { type CSSProperties, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -39,9 +39,11 @@ export interface SignInEmailStepProps {
   oAuthSSOProviders: string[];
   onCheckUser: (values: { email: string }) => Promise<void>;
   onGoToSignup: () => void;
+  onPasskeySignIn: () => void;
   onResetEmail: () => void;
   onSetPassword: () => void;
   onSocialSignIn: (provider: string) => void;
+  passkeyLoading: boolean;
   serverConfigInit: boolean;
   socialLoading: string | null;
 }
@@ -53,10 +55,12 @@ export const SignInEmailStep = ({
   lastAuthProvider,
   loading,
   oAuthSSOProviders,
+  passkeyLoading,
   serverConfigInit,
   socialLoading,
   onCheckUser,
   onGoToSignup,
+  onPasskeySignIn,
   onResetEmail,
   onSetPassword,
   onSocialSignIn,
@@ -89,6 +93,18 @@ export const SignInEmailStep = ({
 
   return (
     <AuthCard title={t('signin.subtitle', { appName: BRANDING_NAME })}>
+      <Flexbox gap={12}>
+        <Button
+          block
+          icon={<Icon icon={KeyRound} />}
+          loading={passkeyLoading}
+          size="large"
+          onClick={onPasskeySignIn}
+        >
+          {t('betterAuth.signin.continueWithPasskey')}
+        </Button>
+        {(oAuthSSOProviders.length > 0 || showEmailForm) && divider}
+      </Flexbox>
       {serverConfigInit && oAuthSSOProviders.length > 0 && (
         <Flexbox gap={12}>
           {oAuthSSOProviders.map((provider) => {
