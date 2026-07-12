@@ -22,6 +22,7 @@ export interface MessageGatewayConnectionStatus {
   config: { connectionId: string; platform: string } | null;
   state: {
     connectedAt?: number;
+    errorCode?: string;
     error?: string;
     platform: string;
     status: 'connected' | 'connecting' | 'disconnected' | 'dormant' | 'error';
@@ -155,6 +156,22 @@ export class MessageGatewayClient {
 
     if (!res.ok) {
       throw new Error(`message-gateway stats failed (${res.status})`);
+    }
+
+    return res.json();
+  }
+
+  /**
+   * All connectionIds the gateway has ever registered and not yet explicitly
+   * disconnected. Unlike `getStats` (which the AdminDO prunes after 30min of
+   * silence), this set retains dormant/hibernated connections, so it is the
+   * authoritative "actual" set for reconciliation.
+   */
+  async getRegisteredIds(): Promise<{ ids: string[] }> {
+    const res = await this.fetch('/api/admin/registered-ids');
+
+    if (!res.ok) {
+      throw new Error(`message-gateway registered-ids failed (${res.status})`);
     }
 
     return res.json();

@@ -26,6 +26,13 @@ export interface ExtractFilesResult {
  */
 export type ConnectionMode = 'polling' | 'webhook' | 'websocket';
 
+export interface PlatformAccessMeta {
+  allowed?: boolean;
+  blockedMessage?: string;
+  requiredPlan?: 'paid';
+  rolloutMode?: 'enforce' | 'notice';
+}
+
 // --------------- Field Schema ---------------
 
 /**
@@ -185,6 +192,23 @@ export interface PlatformClient {
 
   /** Create a Chat SDK adapter config for inbound message handling. */
   createAdapter: () => Record<string, any>;
+
+  /**
+   * Ensure the triggering user is a member of the platform thread the bot
+   * replies in, so the platform pushes them a notification and surfaces the
+   * thread in their client.
+   *
+   * Discord: the auto-created per-mention reply thread never adds the
+   * mentioning user as a member — the reply lands in a thread the user is
+   * not notified about, and thread-pill rendering on the origin message has
+   * proven unreliable (LOBE-11632: two separate clients showed no pill for
+   * hours while the API said `HAS_THREAD`). Explicit membership bypasses
+   * both gaps. Best-effort — implementations must swallow failures.
+   *
+   * Platforms whose replies land directly in the conversation (Telegram,
+   * Slack channel replies, DMs) can omit this method.
+   */
+  ensureThreadMember?: (platformThreadId: string, platformUserId: string) => Promise<void>;
 
   /**
    * Read the inbound message author's preferred language from the platform
@@ -420,6 +444,9 @@ export abstract class ClientFactory {
  * Contains metadata, factory, and validation. All runtime operations go through PlatformClient.
  */
 export interface PlatformDefinition {
+  /** Optional access metadata resolved for the current user by business slots. */
+  access?: PlatformAccessMeta;
+
   /** Factory for creating PlatformClient instances and validating credentials/settings. */
   clientFactory: ClientFactory;
 

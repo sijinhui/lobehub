@@ -1,11 +1,52 @@
 import type { PartialDeep } from 'type-fest';
 import { z } from 'zod';
 
+import type { DeviceExecutionTarget } from '../agent/agencyConfig';
 import type { Plans } from '../subscription';
 import type { TopicGroupMode, TopicSortBy } from '../topic';
 import type { UserAgentOnboarding } from './agentOnboarding';
 import type { UserOnboarding } from './onboarding';
 import type { UserSettings } from './settings';
+
+/**
+ * Per-agent override for the device execution decision. Stored on
+ * `workspace_user_settings.preference.agentDeviceOverrides` (see
+ * {@link WorkspaceUserPreference}) and merged over `agents.agencyConfig` at
+ * read time so each workspace member's Cloud Sandbox / workspace-device /
+ * local-machine choice is independent — one member's pick never traps
+ * another. See `resolveAgencyConfig` in
+ * `packages/types/src/agent/agencyConfig.ts` for the merge implementation.
+ *
+ * Two fields only, deliberately: `executionTarget` + `boundDeviceId`.
+ * `heterogeneousProvider`, `verifyRubricId`, and `workingDirByDevice` remain
+ * agent-shared because they describe *what the agent is*, not *how this user
+ * routes it*.
+ */
+export interface AgentDeviceOverride {
+  boundDeviceId?: string;
+  executionTarget?: DeviceExecutionTarget;
+}
+
+/**
+ * Per-user preferences that only make sense inside a specific workspace.
+ *
+ * Stored in its own DB table (`workspace_user_settings`, PK
+ * `(workspace_id, user_id)`) — the workspace-scoped counterpart to
+ * `user_settings`. The dedicated table lets:
+ *   - workspace / user delete cascade take out every trace in one shot;
+ *   - member-list queries stay leak-free (they hit `workspace_members`, not
+ *     this table);
+ *   - the "workspace-scoped user preference" boundary be obvious at the
+ *     schema layer.
+ *
+ * A single jsonb `preference` column holds this shape today (matches how
+ * `users.preference` scales); if a future family grows large enough to
+ * deserve its own column (à la `user_settings.hotkey` / `user_settings.tts`),
+ * split it out at that point.
+ */
+export interface WorkspaceUserPreference {
+  agentDeviceOverrides?: Record<string /* agentId */, AgentDeviceOverride>;
+}
 
 export interface LobeUser {
   avatar?: string;
@@ -39,13 +80,17 @@ export type UserGuide = z.infer<typeof UserGuideSchema>;
 
 export const UserLabSchema = z.object({
   /**
+   * enable graph runtime configuration for agents
+   */
+  enableAgentGraphConfig: z.boolean().optional(),
+  /**
    * enable agent self-iteration feedback capture and policy execution
    */
   enableAgentSelfIteration: z.boolean().optional(),
   /**
-   * enable the floating chat panel in agent document preview
+   * run Claude Code hetero sessions through the Claude Agent SDK instead of CLI spawn
    */
-  enableAgentDocumentFloatingChatPanel: z.boolean().optional(),
+  enableClaudeCodeSdk: z.boolean().optional(),
   /**
    * enable the Fleet view (side-by-side running-task dashboard)
    */
@@ -63,9 +108,17 @@ export const UserLabSchema = z.object({
    */
   enableImessage: z.boolean().optional(),
   /**
+   * show the in-app Browser tab in the conversation WorkingSidebar (desktop only)
+   */
+  enableInAppBrowser: z.boolean().optional(),
+  /**
    * enable markdown rendering in chat input editor
    */
   enableInputMarkdown: z.boolean().optional(),
+  /**
+   * enable selecting message text and adding it to the next conversation context
+   */
+  enableMessageTextSelectionActions: z.boolean().optional(),
   /**
    * show the "Add Platform Agent" entry in the create menu
    */
@@ -115,11 +168,7 @@ export interface UserPreference {
 }
 
 export type ReferralStatusString =
-  | 'pending_reward'
-  | 'registered'
-  | 'suspected'
-  | 'rewarded'
-  | 'revoked';
+  'pending_reward' | 'registered' | 'suspected' | 'rewarded' | 'revoked';
 
 export interface UserInitializationState {
   agentOnboarding?: UserAgentOnboarding;

@@ -76,8 +76,8 @@ const updateSchema = z.object({
   assigneeAgentId: z.string().nullish(),
   assigneeUserId: z.string().nullish(),
   automationMode: z.enum(['heartbeat', 'schedule']).nullish(),
-  config: z.record(z.unknown()).optional(),
-  context: z.record(z.unknown()).optional(),
+  config: z.record(z.string(), z.unknown()).optional(),
+  context: z.record(z.string(), z.unknown()).optional(),
   description: z.string().optional(),
   editorData: z.unknown().optional(),
   // 0 clears the interval (disables heartbeat); any positive value must be
@@ -884,8 +884,8 @@ export const taskRouter = router({
             maxIterations: z.number().min(1).max(10).default(3),
             rubrics: z.array(
               z.object({
-                config: z.record(z.unknown()),
-                extractor: z.record(z.unknown()).optional(),
+                config: z.record(z.string(), z.unknown()),
+                extractor: z.record(z.string(), z.unknown()).optional(),
                 id: z.string(),
                 name: z.string(),
                 threshold: z.number().min(0).max(1).optional(),
@@ -1071,22 +1071,6 @@ export const taskRouter = router({
       try {
         const resolved = await resolveOrThrow(ctx.taskModel, input.id);
 
-        // Visibility is a one-way commitment: once a task is published to the
-        // workspace, retracting it back to private would yank a resource other
-        // members may already be running, referencing, or commenting on. The
-        // product surface enforces this via a "Publish to Workspace" action
-        // that has no inverse — any caller asking for public→private here is
-        // either a stale UI path or a direct API client and should be rejected.
-        // Placed before the edit-lock check because the invariant is schema-
-        // level, not concurrency-level: there is no legitimate "wait for the
-        // lock and try again" outcome.
-        if (resolved.visibility === 'public' && input.visibility === 'private') {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'Task visibility cannot be reverted from public to private',
-          });
-        }
-
         // Mirror the edit-lock contract from `update`: reject visibility flips
         // while another workspace member is actively editing this task. Without
         // this check a collaborator could silently retitle a private task to
@@ -1118,6 +1102,25 @@ export const taskRouter = router({
             throw new TRPCError({
               code: 'FORBIDDEN',
               message: 'Only the task creator or workspace owner can change visibility',
+            });
+          }
+        }
+
+        // Demoting a mixed-creator subtree would fracture it: each descendant
+        // stays owned by its creator, so the root creator loses other
+        // members' subtasks while those members keep orphaned children whose
+        // parent is hidden. Reject early — the subtree must be single-creator
+        // to go private.
+        if (input.visibility === 'private') {
+          const hasOtherCreators = await ctx.taskModel.subtreeHasOtherCreators(
+            resolved.id,
+            resolved.createdByUserId,
+          );
+          if (hasOtherCreators) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message:
+                'Cannot make this task private while it has subtasks created by other members. Reassign or remove those subtasks first.',
             });
           }
         }
@@ -1192,7 +1195,7 @@ export const taskRouter = router({
   }),
 
   updateConfig: taskProcedureWrite
-    .input(idInput.merge(z.object({ config: z.record(z.unknown()) })))
+    .input(idInput.merge(z.object({ config: z.record(z.string(), z.unknown()) })))
     .mutation(async ({ input, ctx }) => {
       const { id, config } = input;
       try {
@@ -1278,6 +1281,7 @@ export const taskRouter = router({
   transferTask: taskProcedureWrite
     .input(
       z.object({
+        targetVisibility: z.enum(['private', 'public']).optional(),
         targetWorkspaceId: z.string().nullable(),
         taskId: z.string(),
       }),
@@ -1332,12 +1336,18 @@ export const taskRouter = router({
         }
       }
 
-      return ctx.taskModel.transferTo(task.id, input.targetWorkspaceId, ctx.userId);
+      return ctx.taskModel.transferTo(
+        task.id,
+        input.targetWorkspaceId,
+        ctx.userId,
+        input.targetVisibility,
+      );
     }),
 
   copyTaskToWorkspace: taskProcedureWrite
     .input(
       z.object({
+        targetVisibility: z.enum(['private', 'public']).optional(),
         targetWorkspaceId: z.string().nullable(),
         taskId: z.string(),
       }),
@@ -1367,6 +1377,11 @@ export const taskRouter = router({
         }
       }
 
-      return ctx.taskModel.copyToWorkspace(task.id, input.targetWorkspaceId, ctx.userId);
+      return ctx.taskModel.copyToWorkspace(
+        task.id,
+        input.targetWorkspaceId,
+        ctx.userId,
+        input.targetVisibility,
+      );
     }),
 });

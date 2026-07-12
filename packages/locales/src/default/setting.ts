@@ -189,6 +189,7 @@ export default {
   'agentSkillModal.url.title': 'Import from URL',
   'agentSkillModal.url.urlPlaceholder': 'https://example.com/path/to/SKILL.md',
   'agentSkillTag': 'Agent Skill',
+  'agentTab.graph': 'Graph Runtime',
   'agentTab.opening': 'Opening Settings',
   'agentTab.plugin': 'Skill Settings',
   'agentTab.prompt': 'Agent Profile',
@@ -290,6 +291,16 @@ export default {
   'creds.file.uploadFailed': 'File upload failed',
   'creds.file.uploadSuccess': 'File uploaded successfully',
   'creds.file.uploading': 'Uploading...',
+  'creds.orgSetupRequired':
+    'Community Profile not set up yet. Please complete the workspace Community Profile setup to manage credentials.',
+  'creds.owner.sharedBy': 'Shared by {{name}}',
+  'creds.personalSection.desc':
+    'These are your own credentials. Turn on sharing to make one available to this workspace.',
+  'creds.personalSection.title': 'Your Personal Credentials',
+  'creds.share.error': 'Failed to update sharing for this credential. Please try again.',
+  'creds.share.toggle': 'Share to this workspace',
+  'creds.share.visibility.private': 'Private',
+  'creds.share.visibility.public': 'Public',
   'creds.signIn': 'Sign In to Market',
   'creds.signInRequired': 'Please sign in to the Market to manage your credentials',
   'creds.form.addPair': 'Add Key-Value Pair',
@@ -338,6 +349,7 @@ export default {
   'creds.view.values': 'Credential Values',
   'creds.view.warning': 'These values are sensitive. Do not share them with others.',
   'devices.actions.edit': 'Edit',
+  'devices.actions.refresh': 'Refresh',
   'devices.actions.remove': 'Remove',
   'devices.actions.removeSelected': 'Remove ({{count}})',
   'devices.channel.connected': 'Connected {{time}}',
@@ -408,19 +420,62 @@ export default {
   'devices.remove.confirmMany': 'Remove {{count}} devices?',
   'devices.remove.confirmManyDesc':
     'This disconnects the selected devices from your account. They are not signed out, and each can re-register on next connect.',
+  'devices.remove.currentSessionWarning':
+    "This includes the device you're using right now — removing it disconnects your current session.",
   'devices.selection.selected': '{{count}} selected',
   'devices.selection.total': '{{count}} devices',
+  'devices.share.alreadyShared': 'Shared',
+  'devices.share.badge': 'Shared to {{count}} workspaces',
+  'devices.share.confirm': 'Share',
+  'devices.share.detailLabel': 'Shared to workspaces',
+  'devices.share.done': 'Done',
+  'devices.share.empty': "You haven't joined any workspace yet.",
+  'devices.share.goToTarget': 'Go to {{name}}',
+  'devices.share.menu': 'Share to Workspace…',
+  'devices.share.modalDesc':
+    'Pick a workspace to share this device into. Members can dispatch agent runs to it while it stays online.',
+  'devices.share.modalTitle': 'Share Device to Workspace',
+  'devices.share.offlineDesc': 'The device must be online to share',
+  'devices.share.overwriteConfirmDesc':
+    'This machine is already enrolled in this workspace with {{current}} access. Continue to change it to {{next}} and link it to this device.',
+  'devices.share.overwriteConfirmOk': 'Overwrite',
+  'devices.share.overwriteConfirmTitle': 'Already in {{name}} — overwrite?',
+  'devices.share.revoke': 'Unshare',
+  'devices.share.revokeConfirmDesc':
+    'This removes the device from that workspace. Members can no longer dispatch runs to it; you can share it again anytime.',
+  'devices.share.revokeConfirmTitle': 'Unshare from {{name}}?',
+  'devices.share.selectPlaceholder': 'Select a workspace',
+  'devices.share.sharedByTag': 'Shared by {{name}}',
+  'devices.share.success': 'Device shared to {{name}}',
+  'devices.share.targetLabel': 'Share to',
+  'devices.share.viewerHint': 'Viewers cannot share devices',
+  'devices.share.visibilityTag.private': 'Private',
+  'devices.share.visibilityTag.public': 'Workspace',
   'devices.status.offline': 'Offline',
   'devices.status.online': 'Online',
   'devices.title': 'My Devices',
+  'devices.visibility.publish': 'Publish to Workspace',
+  'devices.visibility.publishConfirmTitle': 'Publish this device to the workspace?',
+  'devices.visibilityTabs.private': 'Private',
+  'devices.visibilityTabs.workspace': 'Workspace',
   'devices.workingDirectory': 'Working dir: {{path}}',
+  'downloads.desktop.cta': 'Download desktop app',
+  'downloads.desktop.desc':
+    'Use the native desktop app for local files, system tools, and focused work on your computer.',
+  'downloads.desktop.title': 'Desktop App',
+  'downloads.messenger.cta': 'Open Messenger settings',
+  'downloads.messenger.desc':
+    'Connect LobeHub to the messaging platforms you already use, with quick setup or your own bot configuration.',
+  'downloads.messenger.quickSetup': 'Quick setup',
+  'downloads.messenger.quickSetupTooltip':
+    'You can chat with the official LobeHub account on this platform or manually set up your own.',
+  'downloads.messenger.title': 'Messenger integration',
+  'downloads.mobile.cta': 'Get Mobile App',
+  'downloads.mobile.desc':
+    'Start conversations from your phone and keep LobeHub available when you are away from the desk.',
+  'downloads.mobile.title': 'Mobile App',
+  'downloads.title': 'Discover more ways to use LobeHub',
   'checkingPermissions': 'Checking permissions...',
-  'danger.clear.action': 'Clear Now',
-  'danger.clear.confirm': "Clear all chat data? This can't be undone.",
-  'danger.clear.desc':
-    'Delete all data, including agents, files, messages, and skills. Your account will NOT be deleted.',
-  'danger.clear.success': 'All conversation messages have been cleared',
-  'danger.clear.title': 'Clear Data',
   'danger.reset.action': 'Reset Now',
   'danger.reset.confirm': 'Reset all settings?',
   'danger.reset.currentVersion': 'Current Version',
@@ -530,6 +585,7 @@ export default {
   'memory.enabled.desc':
     'Allow LobeHub to extract preferences and info from conversations and use them later. You can view, edit, or clear memory anytime.',
   'memory.enabled.title': 'Enable Memory',
+  'memory.manageEntry': 'Manage memories',
   'memory.title': 'Memory Settings',
   'message.success': 'Update successful',
   'notification.enabled': 'Enabled',
@@ -548,6 +604,7 @@ export default {
   'notification.item.credit_balance_low': 'Credit balance running low',
   'notification.item.image_generation_completed': 'Image generation completed',
   'notification.item.storage_overage_cap_reached': 'Storage pay-as-you-go cap reached',
+  'notification.item.subscription_payment_failed': 'Subscription renewal payment failed',
   'notification.item.video_generation_completed': 'Video generation completed',
   'notification.item.workspace_member_invited': 'Workspace invitation',
   'notification.item.workspace_member_joined': 'New member joined',
@@ -839,6 +896,19 @@ export default {
   'settingOpening.openingQuestions.title': 'Opening Questions',
   'settingOpening.title': 'Opening Settings',
   'settingPlugin.title': 'Skill List',
+  'settingGraphRuntime.enabled.desc':
+    'Route this agent through the graph runtime using the snapshot stored below.',
+  'settingGraphRuntime.enabled.title': 'Enable Graph Runtime',
+  'settingGraphRuntime.snapshot.desc':
+    'Paste the complete ReasoningGraph JSON snapshot. It is stored with this agent and used directly at runtime.',
+  'settingGraphRuntime.snapshot.placeholder':
+    'Paste a ReasoningGraph JSON snapshot, for example: {"name":"...","nodes":{...},"terminal":"...","edges":[]}',
+  'settingGraphRuntime.snapshot.title': 'Graph Snapshot',
+  'settingGraphRuntime.validation.invalidGraph': 'Invalid graph snapshot: {{error}}',
+  'settingGraphRuntime.validation.invalidJson': 'Graph snapshot must be valid JSON.',
+  'settingGraphRuntime.validation.required':
+    'A graph snapshot is required before enabling graph runtime.',
+  'settingGraphRuntime.validation.unknown': 'Unknown graph validation error',
   'settingSelfIteration.enabled.desc':
     'Allow this assistant to review recent signals and improve its own skills when the self-iteration workflow runs.',
   'settingSelfIteration.enabled.managedDesc':
@@ -1155,6 +1225,7 @@ When I am ___, I need ___
   'tab.appearance': 'Appearance',
   'tab.chatAppearance': 'Chat Appearance',
   'tab.common': 'Appearance',
+  'tab.connector': 'Connectors',
   'tab.creds': 'Credentials',
   'tab.devices': 'Devices',
   'tab.experiment': 'Experiment',
@@ -1622,6 +1693,14 @@ When I am ___, I need ___
   'workspace.billingPage.plans.creditsTooltip':
     'Workspace-wide monthly credits. Adding seats does NOT grow the pool — overage flows through AutoTopUp.',
   'workspace.billingPage.plans.capacityOnly': 'Up to {{max}} seats',
+  'workspace.billingPage.plans.compare.collaborationTitle': 'Collaboration & Management',
+  'workspace.billingPage.plans.compare.extraSeats': 'Additional seats',
+  'workspace.billingPage.plans.compare.extraSeatsValue': '${{fee}} / seat / month',
+  'workspace.billingPage.plans.compare.includedSeats': 'Included seats',
+  'workspace.billingPage.plans.compare.maxSeats': 'Member capacity',
+  'workspace.billingPage.plans.compare.seatsTitle': 'Seats & Members',
+  'workspace.billingPage.plans.compare.topUpPrice': 'On-demand top-up',
+  'workspace.billingPage.plans.compare.topUpPriceValue': '${{price}} / 1M credits',
   'workspace.billingPage.plans.downgradeToBasicCta': 'Downgrade',
   'workspace.billingPage.plans.headline': 'Choose a plan',
   'workspace.billingPage.plans.basicCapacity': 'Up to 3 seats',
@@ -1964,7 +2043,8 @@ When I am ___, I need ___
   'workspace.auditLog.upgrade.title': 'Unlock audit logs before issues become incidents',
   'workspace.create.title': 'Create a new workspace',
   'workspace.description.title': 'Description',
-  'workspace.general.avatar.description': "This is your workspace's avatar.",
+  'workspace.general.avatar.description':
+    "This is your workspace's avatar. Click on the avatar to upload a custom one from your files.",
   'workspace.general.avatar.hint': 'An avatar is optional but strongly recommended.',
   'workspace.general.avatar.title': 'Workspace Avatar',
   'workspace.general.avatar.tooLarge': 'Avatar file must be smaller than 5MB.',
@@ -2030,7 +2110,7 @@ When I am ___, I need ___
   'workspace.general.transferAgents.modal.selectPlaceholder':
     'Select workspace or personal account...',
   'workspace.general.transferAgents.modal.selectTarget':
-    'Choose where to move the Agents. They will leave the current space.',
+    'You can move to personal or workspaces that have permission to create an agent.',
   'workspace.general.transferAgents.modal.selected': 'selected',
   'workspace.general.transferAgents.modal.selectedAgent':
     'This Agent will move to {{target}} and leave the current space.',
@@ -2040,6 +2120,13 @@ When I am ___, I need ___
   'workspace.general.transferAgents.modal.warning':
     'Custom plugins may not be available and multi-agent group associations will be removed.',
   'workspace.general.transferAgents.personalAccount': 'Personal Account',
+  'workspace.general.transferScope.private.desc': 'Only accessible to you',
+  'workspace.general.transferScope.private.label': 'Private',
+  'workspace.general.transferScope.title': 'Access',
+  'workspace.general.transferScope.workspace.desc': 'Shared with all workspace members',
+  'workspace.general.transferScope.workspace.label': 'Workspace',
+  'workspace.general.copyTargetLabel': 'Copy to',
+  'workspace.general.transferTargetLabel': 'Move to',
   'workspace.general.transferAgentGroups.modal.back': 'Back',
   'workspace.general.transferAgentGroups.modal.continue': 'Continue',
   'workspace.general.transferAgentGroups.modal.done': 'Done',
@@ -2051,7 +2138,7 @@ When I am ___, I need ___
   'workspace.general.transferAgentGroups.modal.selectPlaceholder':
     'Select workspace or personal account...',
   'workspace.general.transferAgentGroups.modal.selectTarget':
-    'Choose a workspace or personal account to transfer agent groups to.',
+    'You can move to personal or workspaces that have permission to create an agent group.',
   'workspace.general.transferAgentGroups.modal.selected': 'selected',
   'workspace.general.transferAgentGroups.modal.selectedGroup': 'Agent group to transfer.',
   'workspace.general.transferAgentGroups.modal.success':
@@ -2091,7 +2178,7 @@ When I am ___, I need ___
     'Select Agents to copy. Originals stay where they are.',
   'workspace.general.copyLobeAI.modal.selectPlaceholder': 'Select workspace or personal account...',
   'workspace.general.copyLobeAI.modal.selectTarget':
-    'Choose where to create the copies. The originals stay where they are.',
+    'You can copy to personal or workspaces that have permission to create an agent.',
   'workspace.general.copyLobeAI.modal.success': '{{count}} agent(s) copied',
   'workspace.general.copyLobeAI.modal.title': 'Copy Agents',
   'workspace.general.copyLobeAI.modal.untitledAgent': 'Untitled Agent',
@@ -2121,7 +2208,7 @@ When I am ___, I need ___
   'workspace.general.copyAgentGroups.modal.selectPlaceholder':
     'Select workspace or personal account...',
   'workspace.general.copyAgentGroups.modal.selectTarget':
-    'Choose the target workspace or personal account. Group configuration and members are copied.',
+    'You can copy to personal or workspaces that have permission to create an agent group.',
   'workspace.general.copyAgentGroups.modal.selected': 'selected',
   'workspace.general.copyAgentGroups.modal.selectedGroup': 'Agent group to copy.',
   'workspace.general.copyAgentGroups.modal.success': '{{count}} agent group(s) copied',
@@ -2285,14 +2372,21 @@ When I am ___, I need ___
   'workspace.members.invite.invitationLimitReached':
     'This workspace has reached its pending-invitation limit of {{limit}}. Revoke or wait for unused invitations to expire before sending new ones.',
   'workspace.members.invite.limitReached':
-    'This workspace can have up to {{limit}} members. Remove a member before inviting more.',
+    'This workspace has reached its {{limit}}-member limit. You can still invite viewers, who don’t take a seat.',
   'workspace.members.invite.askOwnerToBuySeats':
     'Ask the workspace owner to purchase more seats before inviting new members.',
   'workspace.members.invite.buySeatsCta': 'Buy seats',
   'workspace.members.invite.seatInsufficient':
-    'Only {{remaining}} seat(s) remaining. Buy more seats to invite {{required}} new member(s).',
+    'Only {{remaining}} seat(s) remaining. Buy more seats to invite {{required}} new member(s), or invite viewers instead (they don’t take a seat).',
   'workspace.members.invite.seatInsufficientNoBuy':
-    'Only {{remaining}} seat(s) remaining. Ask the workspace owner to purchase more seats.',
+    'Only {{remaining}} seat(s) remaining. Ask the workspace owner to purchase more seats, or invite viewers instead (they don’t take a seat).',
+  'workspace.members.invite.freePlanLimitReached':
+    'Your Free workspace has reached its {{limit}}-member limit. Upgrade to Pro to invite more members, or invite viewers instead (they don’t take a seat).',
+  'workspace.members.invite.freePlanSeatInsufficient':
+    'Only {{remaining}} seat(s) remaining on your Free workspace. Upgrade to Pro to invite {{required}} new member(s), or invite viewers instead (they don’t take a seat).',
+  'workspace.members.invite.freePlanAskOwnerToUpgrade':
+    'This Free workspace can’t invite more members. Ask the workspace owner to upgrade to Pro, or invite viewers instead (they don’t take a seat).',
+  'workspace.members.invite.upgradePlanCta': 'Upgrade plan',
   'workspace.members.invite.roleLabel': 'Role',
   'workspace.members.invite.submit': 'Invite',
   'workspace.members.invite.subtitle':
@@ -2638,7 +2732,10 @@ When I am ___, I need ___
   'workspaceSetting.devices.enrollTitle': 'Add a device',
   'workspaceSetting.devices.heroDesc':
     'Enroll a shared machine — a build server or a team Mac — and every member can run agents on it: read/write files, run commands, and call system tools.',
+  'workspaceSetting.devices.heroDescPrivate':
+    "Enroll a machine for your own use in this workspace — other members can't see or use it. Run agents on it: read/write files, run commands, and call system tools.",
   'workspaceSetting.devices.heroTitle': 'Connect your first workspace device',
+  'workspaceSetting.devices.heroTitlePrivate': 'Connect your first private device',
   'workspaceSetting.devices.offline': 'Offline',
   'workspaceSetting.devices.online': 'Online',
   'workspaceSetting.devices.readonlyHint':
@@ -2651,15 +2748,13 @@ When I am ___, I need ___
   'workspaceSetting.tab.general': 'General',
   'workspaceSetting.tab.members': 'Members',
   'workspaceSetting.storage.comingSoon': 'Workspace-scoped data import & export is coming soon.',
-  'workspaceSetting.storage.danger.clear.desc':
-    'Delete all data in this workspace, including agents, files, messages, and skills. The workspace itself will NOT be deleted.',
-  'workspaceSetting.storage.danger.clear.title': 'Clear Workspace Data',
   'workspaceSetting.storage.danger.reset.desc':
     'Restore all workspace settings to defaults. Workspace data will not be deleted.',
   'workspaceSetting.storage.danger.reset.title': 'Reset Workspace Settings',
   'workspaceSetting.storage.telemetry.desc':
     'Help us improve {{appName}} with anonymous workspace usage data',
   'workspaceSetting.storage.telemetry.title': 'Send Anonymous Workspace Usage Data',
+  'workspaceSetting.tab.connector': 'Connectors',
   'workspaceSetting.tab.skill': 'Skills',
   'tools.add': 'Add Skill',
   'tools.addSkillOrConnector': 'Add Skills / Connectors',
@@ -3007,6 +3102,8 @@ When I am ___, I need ___
   'tools.search': 'Search skills...',
   'tools.activation.auto': 'Auto',
   'tools.activation.auto.desc': 'Smart',
+  'tools.activation.disabled': 'Disabled',
+  'tools.activation.disabled.desc': 'Turned Off',
   'tools.activation.fixed.hint': 'Always on — managed by the app and can’t be turned off',
   'tools.activation.pinned': 'Pinned',
   'tools.activation.pinned.desc': 'Always On',

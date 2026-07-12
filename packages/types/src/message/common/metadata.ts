@@ -1,6 +1,8 @@
 import { z } from 'zod';
 
 import { RequestTrigger } from '../../agentRuntime';
+import type { ContextSelection } from './contextSelection';
+import { ContextSelectionSchema } from './contextSelection';
 import type { PageSelection } from './pageSelection';
 import { PageSelectionSchema } from './pageSelection';
 
@@ -180,6 +182,7 @@ export const MessageTaskCallbackSchema = z.object({
 
 export const MessageMetadataSchema = ModelUsageSchema.merge(ModelPerformanceSchema).extend({
   collapsed: z.boolean().optional(),
+  contextSelections: z.array(ContextSelectionSchema).optional(),
   // Hetero-agent (Claude Code) per-message provenance. Listed here so zod does
   // NOT strip them from writes going through UpdateMessageParamsSchema /
   // CreateMessageParamsSchema (the renderer executor's `messageService` path).
@@ -262,16 +265,25 @@ export interface MessageMetadata {
    */
   collapsed?: boolean;
   compare?: boolean;
+  /**
+   * Generic context selections attached to user messages.
+   * Page selections remain mirrored in `pageSelections` for compatibility.
+   */
+  contextSelections?: ContextSelection[];
   /** @deprecated use the top-level message `usage` field instead */
   cost?: number;
   /** @deprecated use `metadata.performance` instead */
   duration?: number;
   finishType?: string;
   /**
-   * The CC-native `message.id` of the hetero-agent (Claude Code) turn that
-   * produced this message. Forensic provenance stamped by both the server
-   * persistence handler and the renderer executor, so a diff can tie a row
-   * back to its CC turn.
+   * The native id of this message inside the hetero agent (Claude Code /
+   * Codex) that produced it — forensic provenance tying a row back to its
+   * source.
+   *
+   * - live runs: the CC API `message.id` of the turn (all the stream exposes),
+   *   stamped by the server persistence handler and the renderer executor
+   * - imported transcripts: the record's own id in the source file (CC session
+   *   record `uuid`; codex call item `fc_...` / `ctc_...` id)
    */
   heteroMessageId?: string;
   /**

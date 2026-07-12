@@ -44,11 +44,6 @@
       "count": 1
     }
   },
-  "src/components/InvalidAPIKey/__tests__/ComfyUIForm.test.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/InvalidAPIKey/index.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -889,11 +884,6 @@
       "count": 1
     }
   },
-  "src/routes/(main)/[workspaceSlug]/settings/devices/index.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/routes/(main)/agent/features/Conversation/AgentWelcome/ToolAuthAlert.tsx": {
     "no-restricted-imports": {
       "count": 2
@@ -1249,11 +1239,6 @@
       "count": 1
     }
   },
-  "src/routes/(main)/settings/creds/features/CreateCredModal/OAuthCredForm.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/routes/(main)/settings/creds/features/CredItem.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -1275,11 +1260,6 @@
     }
   },
   "src/routes/(main)/settings/creds/index.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/routes/(main)/settings/devices/index.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -1359,17 +1339,7 @@
       "count": 1
     }
   },
-  "src/routes/(main)/settings/skill/features/ComposioSkillItem.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/routes/(main)/settings/skill/features/LeftPanel.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/routes/(main)/settings/skill/features/LobehubSkillItem.tsx": {
     "no-restricted-imports": {
       "count": 1
     }

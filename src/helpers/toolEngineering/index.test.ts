@@ -120,6 +120,7 @@ vi.mock('../isCanUseFC', () => ({
 }));
 
 let mockCurrentAgentPlugins: string[] = [];
+let mockCurrentAgentDisabledPlugins: string[] = [];
 
 vi.mock('@/store/agent', () => ({
   getAgentStoreState: () => ({}),
@@ -127,6 +128,7 @@ vi.mock('@/store/agent', () => ({
 
 vi.mock('@/store/agent/selectors', () => ({
   agentSelectors: {
+    currentAgentDisabledPlugins: () => mockCurrentAgentDisabledPlugins,
     currentAgentPlugins: () => mockCurrentAgentPlugins,
     hasEnabledKnowledgeBases: () => false,
   },
@@ -164,6 +166,7 @@ describe('toolEngineering', () => {
     mockInstalledPluginManifestList = () => [];
     mockUseApplicationBuiltinSearchTool = true;
     mockCurrentAgentPlugins = [];
+    mockCurrentAgentDisabledPlugins = [];
     mockIsCanUseFC = true;
   });
 
@@ -286,6 +289,23 @@ describe('toolEngineering', () => {
       expect(result.enabledToolIds).toContain('lobe-agent');
     });
 
+    it('should honor an explicit disabled policy for an always-on builtin tool', () => {
+      mockCurrentAgentDisabledPlugins = ['lobe-agent'];
+
+      const toolsEngine = createAgentToolsEngine({
+        model: 'deepseek-chat',
+        provider: 'deepseek',
+      });
+
+      const result = toolsEngine.generateToolsDetailed({
+        model: 'deepseek-chat',
+        provider: 'deepseek',
+        toolIds: [],
+      });
+
+      expect(result.enabledToolIds).not.toContain('lobe-agent');
+    });
+
     it('should use chat-mode defaults when the model does not support function calling', () => {
       mockIsCanUseFC = false;
 
@@ -382,6 +402,33 @@ describe('toolEngineering', () => {
       // Both should be enabled despite their normal filters
       expect(result.enabledToolIds).toContain('stdio-mcp-plugin');
       expect(result.enabledToolIds).toContain('lobe-web-browsing');
+    });
+
+    it('does NOT let isExplicitActivation enable a plugin the agent has disabled', () => {
+      mockInstalledPluginManifestList = () => [
+        {
+          api: [{ description: 'x', name: 'x', parameters: {} }],
+          identifier: 'disabled-plugin',
+          meta: { title: 'Disabled Plugin' },
+          type: 'default',
+        } as unknown as ToolManifest,
+      ];
+      mockCurrentAgentDisabledPlugins = ['disabled-plugin'];
+
+      const toolsEngine = createAgentToolsEngine({ model: 'gpt-4', provider: 'openai' });
+      const result = toolsEngine.generateToolsDetailed({
+        context: { isExplicitActivation: true },
+        toolIds: ['disabled-plugin'],
+        model: 'gpt-4',
+        provider: 'openai',
+        skipDefaultTools: true,
+      });
+
+      // Unlike a merely rule-disabled tool, a disabled plugin's manifest is
+      // absent from the pool entirely, so explicit activation has nothing to
+      // resolve — it can't bypass a gate that was never reached.
+      expect(result.enabledToolIds).not.toContain('disabled-plugin');
+      expect(result.enabledToolIds).toEqual([]);
     });
   });
 

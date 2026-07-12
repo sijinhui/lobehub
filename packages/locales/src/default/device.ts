@@ -6,6 +6,7 @@ export default {
   'workingDirectory.agentDescription':
     'Default working directory for all conversations with this Agent',
   'workingDirectory.agentLevel': 'Agent Working Directory',
+  'workingDirectory.branchInWorktree': 'In worktree {{name}}',
   'workingDirectory.branchSearchPlaceholder': 'Search branches',
   'workingDirectory.branchesEmpty': 'No local branches',
   'workingDirectory.branchesHeading': 'Branches',
@@ -17,11 +18,17 @@ export default {
   'workingDirectory.checkoutFailed': 'Checkout failed',
   'workingDirectory.chooseDifferentFolder': 'Choose a folder...',
   'workingDirectory.clear': 'Reset to default',
+  'workingDirectory.clearDefault': 'Clear default',
   'workingDirectory.clean': 'clean',
   'workingDirectory.createBranchAction': 'Checkout new branch…',
   'workingDirectory.createBranchTitle': 'Create new branch',
+  'workingDirectory.createWorktreeAction': 'Create worktree…',
+  'workingDirectory.createWorktreeFailed': 'Create worktree failed',
+  'workingDirectory.createWorktreeSubmit': 'Create',
+  'workingDirectory.createWorktreeTitle': 'Create new worktree',
   'workingDirectory.current': 'Current working directory',
   'workingDirectory.defaultBadge': 'Default',
+  'workingDirectory.defaultUpdateFailed': 'Couldn’t update the default working directory',
   'workingDirectory.deleteBranchAction': 'Delete branch',
   'workingDirectory.deleteBranchConfirm':
     'Delete branch “{{name}}”? This permanently removes it, including any unmerged commits.',
@@ -30,6 +37,8 @@ export default {
   'workingDirectory.detachedHead': 'Detached HEAD at {{sha}}',
   'workingDirectory.diffStatTooltip':
     'Added {{added}} · Modified {{modified}} · Deleted {{deleted}}',
+  'workingDirectory.diffLineStatTooltip':
+    'Added lines {{added}} · Deleted lines {{deleted}} · Changed files {{files}}',
   'workingDirectory.filesAdded': 'Added',
   'workingDirectory.filesDeleted': 'Deleted',
   'workingDirectory.filesEmpty': 'No uncommitted changes',
@@ -38,6 +47,7 @@ export default {
   'workingDirectory.ghMissing':
     'Install and log in to the GitHub CLI (`gh`) to see linked pull requests',
   'workingDirectory.newBranchPlaceholder': 'feature/new-branch-name',
+  'workingDirectory.newWorktreeLocation': 'Will be created at {{path}}',
   'workingDirectory.noMatch': 'No matching directories',
   'workingDirectory.noRecent': 'No directories yet',
   'workingDirectory.notSet': 'Click to set working directory',
@@ -56,7 +66,7 @@ export default {
   'workingDirectory.pushInProgress': 'Pushing…',
   'workingDirectory.pushNoop': 'Everything up-to-date',
   'workingDirectory.pushSuccess': 'Pushed successfully',
-  'workingDirectory.recent': 'Working directories',
+  'workingDirectory.recent': 'Working directory',
   'workingDirectory.refreshGitStatus': 'Refresh branch & PR status',
   'workingDirectory.removeRecent': 'Remove from recent',
   'workingDirectory.removed': 'Removed “{{name}}”',
@@ -83,11 +93,12 @@ export default {
   'workingDirectory.removeWorktreeConfirm':
     'Delete worktree “{{name}}”? This removes the worktree directory but keeps its branch. Git will refuse if it has uncommitted changes.',
   'workingDirectory.removeWorktreeFailed': 'Delete worktree failed',
+  'workingDirectory.removeWorktreePending': 'Deleting worktree “{{name}}”…',
   'workingDirectory.removeWorktreeSuccess': 'Worktree deleted',
   'workingDirectory.removeWorktreeTitle': 'Delete worktree',
-  'workingDirectory.worktreeCount': '{{count}} worktrees',
-  'workingDirectory.worktreeSwitchDescription': 'Switch the current conversation working directory',
+  'workingDirectory.worktreeSearchPlaceholder': 'Search worktrees',
   'workingDirectory.worktreeUnavailable': 'unavailable',
   'workingDirectory.worktreesEmpty': 'No worktrees found',
   'workingDirectory.worktreesHeading': 'Worktrees',
+  'workingDirectory.worktreesNoMatch': 'No matching worktrees',
 };

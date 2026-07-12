@@ -41,13 +41,47 @@ interface LocalFilePreviewKeyParams {
 }
 
 // ---- message ------------------------------------------------------------
+export interface MessageListQueryContext {
+  agentId?: string | null;
+  groupId?: string | null;
+  threadId?: string | null;
+  topicId?: string | null;
+  topicShareId?: string;
+}
+
+export interface CanonicalMessageListContext {
+  agentId: string | null;
+  groupId: string | null;
+  threadId: string | null;
+  topicId: string | null;
+  topicShareId?: string;
+}
+
 /**
- * Message cache schema version. Baked into the message list key so a bump
- * invalidates every persisted message cache entry (e.g. after a message shape
- * change), without touching other domains. Increment when the cached
- * `UIChatMessage[]` shape changes incompatibly.
+ * Reduce every UI conversation variant to the fields understood by the
+ * message-list server query. Keeping normalization beside the key definition
+ * makes key equivalence a property of the registry rather than a caller
+ * convention.
  */
-export const MESSAGE_CACHE_VERSION = 1;
+export const normalizeMessageListQueryContext = (
+  context: MessageListQueryContext,
+): CanonicalMessageListContext => ({
+  agentId: context.agentId ?? null,
+  groupId: context.groupId ?? null,
+  threadId: context.threadId ?? null,
+  topicId: context.topicId ?? null,
+  ...(context.topicShareId === undefined ? {} : { topicShareId: context.topicShareId }),
+});
+
+/** Previous persisted key schema, used only by the targeted v1 → v2 migration. */
+export const LEGACY_MESSAGE_CACHE_VERSION = 1;
+
+/**
+ * Message cache key schema version. Version 2 canonicalizes query context, so
+ * it requires a persisted-key migration even though `UIChatMessage[]` itself
+ * did not change.
+ */
+export const MESSAGE_CACHE_VERSION = 2;
 
 export const messageKeys = {
   /**
@@ -55,7 +89,11 @@ export const messageKeys = {
    * Shared by the conversation store and the chat store so a single fetch
    * serves both.
    */
-  list: def('message:list', (context: unknown) => ['message:list', context, MESSAGE_CACHE_VERSION]),
+  list: def('message:list', (context: MessageListQueryContext) => [
+    'message:list',
+    normalizeMessageListQueryContext(context),
+    MESSAGE_CACHE_VERSION,
+  ]),
 };
 
 // ---- topic --------------------------------------------------------------
@@ -466,12 +504,16 @@ export const deviceKeys = {
     deviceId,
     path,
   ]),
-  gitLinkedPR: def('device:gitLinkedPR', (deviceId: string, path: string, branch: string) => [
+  gitLinkedPR: def(
     'device:gitLinkedPR',
-    deviceId,
-    path,
-    branch,
-  ]),
+    (deviceId: string, path: string, branch: string, pullRequestNumber?: number) => [
+      'device:gitLinkedPR',
+      deviceId,
+      path,
+      branch,
+      ...(pullRequestNumber === undefined ? [] : [pullRequestNumber]),
+    ],
+  ),
   gitRemoteBranches: def('device:gitRemoteBranches', (deviceId: string, dirPath: string) => [
     'device:gitRemoteBranches',
     deviceId,
@@ -672,7 +714,15 @@ export const verifyKeys = {
     'verify:reportBundle',
     verifyRunId,
   ]),
-  reportSummaries: def('verify:reportSummaries', () => ['verify:reportSummaries']),
+  reportSummaries: def(
+    'verify:reportSummaries',
+    (workspaceId?: string | null, q?: string, cursor?: string) => [
+      'verify:reportSummaries',
+      workspaceId ?? '',
+      q ?? '',
+      cursor ?? '',
+    ],
+  ),
   results: def('verify:results', (operationId: string) => ['verify:results', operationId]),
   rubric: def('verify:rubric', (rubricId: string) => ['verify:rubric', rubricId]),
   rubricCriteria: def('verify:rubricCriteria', (rubricId: string) => [

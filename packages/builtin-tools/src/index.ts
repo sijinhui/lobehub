@@ -25,7 +25,7 @@ import { RemoteDeviceManifest } from '@lobechat/builtin-tool-remote-device';
 import { selfFeedbackIntentManifest } from '@lobechat/builtin-tool-self-iteration';
 import { SkillMaintainerManifest } from '@lobechat/builtin-tool-skill-maintainer';
 import { SkillStoreManifest } from '@lobechat/builtin-tool-skill-store';
-import { SkillsManifest } from '@lobechat/builtin-tool-skills';
+import { resolveSkillsManifest, SkillsManifest } from '@lobechat/builtin-tool-skills';
 import { TaskManifest } from '@lobechat/builtin-tool-task';
 import { TopicReferenceManifest } from '@lobechat/builtin-tool-topic-reference';
 import { UserInteractionManifest } from '@lobechat/builtin-tool-user-interaction';
@@ -65,9 +65,9 @@ export const defaultToolIds = [
  * skill-activate mode the discovery tools in `manualModeExcludeToolIds` are still removed
  * from the defaults before the enable checker runs, so they end up disabled there.
  *
- * This list is also the source for the chat-input Tools popover's read-only "Pinned"
- * section (`builtinToolSelectors.fixedDisplayMetaList`), so users can see what the app
- * keeps active — that selector applies the same manual-mode exclusion to stay truthful.
+ * This list is also the source for builtin entries in the chat-input Tools popover.
+ * They default to pinned but can be explicitly disabled per agent; entries represented by
+ * the activation mode control itself are excluded from that menu.
  */
 export const alwaysOnToolIds = [
   LobeAgentManifest.identifier,
@@ -75,6 +75,12 @@ export const alwaysOnToolIds = [
   SkillsManifest.identifier,
   SkillStoreManifest.identifier,
 ];
+
+/**
+ * Runtime tools represented by the skill activation mode control itself. They remain part
+ * of the engine defaults but should not appear as independently configurable tool rows.
+ */
+export const activationModeControlledToolIds = [LobeActivatorManifest.identifier];
 
 /**
  * Tool IDs to exclude from defaults when in manual skill-activate mode.
@@ -169,6 +175,10 @@ const builtinToolRegistry: LobeBuiltinTool[] = [
     hidden: true,
     identifier: SkillsManifest.identifier,
     manifest: SkillsManifest,
+    // Context-aware: prefixes exec-class API descriptions with the run's
+    // actual execution environment (cloud sandbox as fallback / offline
+    // degradation), so the model never assumes they run on the user's machine.
+    resolveManifest: resolveSkillsManifest,
     type: 'builtin',
   },
   {

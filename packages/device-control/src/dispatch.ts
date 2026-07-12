@@ -1,4 +1,5 @@
 import {
+  addGitWorktree,
   checkoutGitBranch,
   deleteGitBranch,
   getGitAheadBehind,
@@ -21,13 +22,17 @@ import {
   writeLocalFile,
 } from '@lobechat/local-file-shell';
 
+import { prepareSkillDirectory } from './skillDirectory';
 import type {
   DeviceControlDeps,
+  EnrollWorkspaceParams,
   InitWorkspaceParams,
   ListProjectSkillsParams,
   LocalFilePreviewUrlParams,
+  PrepareSkillDirectoryParams,
   ProjectFileIndexParams,
   ProjectFileSearchParams,
+  UnenrollWorkspaceParams,
 } from './types';
 import { initWorkspace, listProjectSkills, statPath } from './workspace';
 
@@ -38,8 +43,11 @@ import { initWorkspace, listProjectSkills, statPath } from './workspace';
  * handler, with no per-method gateway route.
  */
 export const DEVICE_RPC_METHODS = [
+  'enrollWorkspace',
+  'unenrollWorkspace',
   'initWorkspace',
   'listProjectSkills',
+  'prepareSkillDirectory',
   'statPath',
   'getProjectFileIndex',
   'searchProjectFiles',
@@ -61,6 +69,7 @@ export const DEVICE_RPC_METHODS = [
   'renameGitBranch',
   'deleteGitBranch',
   'removeGitWorktree',
+  'addGitWorktree',
   'pullGitBranch',
   'pushGitBranch',
   'revertGitFile',
@@ -85,12 +94,31 @@ export const executeDeviceRpc = async (
   deps: DeviceControlDeps,
 ): Promise<unknown> => {
   switch (method) {
+    // Remote workspace share: the host owns the gateway connections, so both
+    // handlers are host-injected. A host that can't manage a second connection
+    // rejects with a stable reason the server surfaces to the user.
+    case 'enrollWorkspace': {
+      if (!deps.enrollWorkspace)
+        throw new Error('This device client does not support workspace sharing');
+      return deps.enrollWorkspace(params as EnrollWorkspaceParams);
+    }
+
+    case 'unenrollWorkspace': {
+      if (!deps.unenrollWorkspace)
+        throw new Error('This device client does not support workspace sharing');
+      return deps.unenrollWorkspace(params as UnenrollWorkspaceParams);
+    }
+
     case 'initWorkspace': {
       return initWorkspace(params as InitWorkspaceParams, deps);
     }
 
     case 'listProjectSkills': {
       return listProjectSkills(params as ListProjectSkillsParams, deps);
+    }
+
+    case 'prepareSkillDirectory': {
+      return prepareSkillDirectory(params as PrepareSkillDirectoryParams, deps);
     }
 
     case 'statPath': {
@@ -126,7 +154,9 @@ export const executeDeviceRpc = async (
     }
 
     case 'getLinkedPullRequest': {
-      return getLinkedPullRequest(params as { branch: string; path: string });
+      return getLinkedPullRequest(
+        params as { branch: string; path: string; pullRequestNumber?: number },
+      );
     }
 
     case 'getGitWorkingTreeStatus': {
@@ -175,6 +205,10 @@ export const executeDeviceRpc = async (
 
     case 'removeGitWorktree': {
       return removeGitWorktree(params as { path: string; worktreePath: string });
+    }
+
+    case 'addGitWorktree': {
+      return addGitWorktree(params as { branch: string; path: string; worktreePath: string });
     }
 
     case 'pullGitBranch': {

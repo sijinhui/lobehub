@@ -2,8 +2,9 @@
 
 import { isDesktop } from '@lobechat/const';
 import type { WorkingDirEntry } from '@lobechat/types';
-import { getWorkingDirEffectivePath } from '@lobechat/types';
-import { Flexbox, Icon, Input, Popover, Tooltip } from '@lobehub/ui';
+import { getWorkingDirSourcePath } from '@lobechat/types';
+import { isRecord } from '@lobechat/utils';
+import { ActionIcon, Flexbox, Icon, Input, Popover, Tooltip } from '@lobehub/ui';
 import { toast } from '@lobehub/ui/base-ui';
 import { createStaticStyles, cssVar, cx } from 'antd-style';
 import {
@@ -21,9 +22,13 @@ import { useTranslation } from 'react-i18next';
 
 import { openAddWorkingDirModal } from '@/features/WorkingDirectory';
 import {
-  resolveAgentWorkingDirectory,
+  resolveAgentWorkingDirectorySource,
   resolveTargetDeviceId,
 } from '@/helpers/agentWorkingDirectory';
+import {
+  getWorkingDirectoryName,
+  getWorkingDirectoryPathString,
+} from '@/helpers/workingDirectoryPath';
 import { deviceService } from '@/services/device';
 import { electronSystemService } from '@/services/electron/system';
 import { useAgentStore } from '@/store/agent';
@@ -155,27 +160,6 @@ const styles = createStaticStyles(({ css }) => ({
     text-overflow: ellipsis;
     white-space: nowrap;
   `,
-  rowAction: css`
-    cursor: pointer;
-
-    display: flex;
-    flex: none;
-    align-items: center;
-    justify-content: center;
-
-    width: 20px;
-    height: 20px;
-    border-radius: ${cssVar.borderRadius};
-
-    color: ${cssVar.colorTextQuaternary};
-
-    transition: all 0.2s;
-
-    &:hover {
-      color: ${cssVar.colorTextSecondary};
-      background: ${cssVar.colorFillSecondary};
-    }
-  `,
   rowActions: css`
     display: none;
     flex: none;
@@ -209,7 +193,8 @@ const styles = createStaticStyles(({ css }) => ({
   `,
 }));
 
-const getDirName = (path: string) => path.split('/').findLast(Boolean) || path;
+const isValidWorkingDirEntry = (entry: unknown): entry is WorkingDirEntry =>
+  isRecord(entry) && !!getWorkingDirectoryPathString(entry.path);
 
 type FolderEntry = { path: string; repoType?: 'git' | 'github' };
 
@@ -317,22 +302,34 @@ const WorkingDirectoryPicker = memo<WorkingDirectoryPickerProps>(({ agentId }) =
   // The local machine's filesystem is browsable; a remote device's is not.
   const isLocalDevice = isDesktop && !!targetDeviceId && targetDeviceId === currentDeviceId;
 
-  const recents = useDeviceStore(deviceSelectors.getDeviceWorkingDirs(targetDeviceId));
-  const deviceDefaultCwd = useDeviceStore(deviceSelectors.getDeviceDefaultCwd(targetDeviceId));
-  const topicWorkingDirectory = useChatStore(topicSelectors.currentTopicWorkingDirectory);
-  const legacyAgentWorkingDirectory = useAgentStore(
+  const rawRecents = useDeviceStore(deviceSelectors.getDeviceWorkingDirs(targetDeviceId));
+  const recents = useMemo(() => rawRecents.filter(isValidWorkingDirEntry), [rawRecents]);
+  const rawDeviceDefaultCwd = useDeviceStore(deviceSelectors.getDeviceDefaultCwd(targetDeviceId));
+  const deviceDefaultCwd = getWorkingDirectoryPathString(rawDeviceDefaultCwd);
+  const rawTopicWorkingDirectory = useChatStore(topicSelectors.currentTopicWorkingDirectory);
+  const topicWorkingDirectory = getWorkingDirectoryPathString(rawTopicWorkingDirectory);
+  const topicWorkingDirectoryConfig = useChatStore(
+    (s) => topicSelectors.currentTopicMetadata(s)?.workingDirectoryConfig,
+  );
+  const rawLegacyAgentWorkingDirectory = useAgentStore(
     (s) => s.localAgentWorkingDirectoryMap[agentId],
   );
+  const legacyAgentWorkingDirectory = getWorkingDirectoryPathString(rawLegacyAgentWorkingDirectory);
 
-  // The explicitly-selected cwd (no home fallback) — drives the active check and
-  // the Reset affordance.
-  const selectedDir = resolveAgentWorkingDirectory({
+  // The explicitly-selected REPO (no home fallback) — drives the directory label,
+  // the active check, and the Reset affordance. Resolves to the SOURCE path
+  // (repo root), never the active worktree: the label shows the repo the agent is
+  // bound to, while the worktree switcher in git status tracks the active
+  // worktree separately.
+  const resolvedSelectedDir = resolveAgentWorkingDirectorySource({
     agencyConfig,
     currentDeviceId,
     deviceDefaultCwd,
     legacyAgentWorkingDirectory,
     topicWorkingDirectory,
+    topicWorkingDirectoryConfig,
   });
+  const selectedDir = getWorkingDirectoryPathString(resolvedSelectedDir);
 
   // Reset only makes sense when an agent-level override exists. The device-wide
   // `deviceDefaultCwd` isn't clearable from here (it's the fallback itself), so
@@ -347,6 +344,7 @@ const WorkingDirectoryPicker = memo<WorkingDirectoryPickerProps>(({ agentId }) =
   );
 
   const { clear, commit } = useCommitWorkingDirectory(agentId);
+  const clearDeviceDefaultCwd = useDeviceStore((s) => s.clearDeviceDefaultCwd);
   const removeDeviceWorkingDir = useDeviceStore((s) => s.removeDeviceWorkingDir);
   const updateDeviceCwd = useDeviceStore((s) => s.updateDeviceCwd);
 
@@ -355,7 +353,7 @@ const WorkingDirectoryPicker = memo<WorkingDirectoryPickerProps>(({ agentId }) =
     if (!query) return recents;
     return recents.filter(
       (entry) =>
-        getDirName(entry.path).toLowerCase().includes(query) ||
+        getWorkingDirectoryName(entry.path)?.toLowerCase().includes(query) ||
         entry.path.toLowerCase().includes(query),
     );
   }, [recents, search]);
@@ -401,19 +399,35 @@ const WorkingDirectoryPicker = memo<WorkingDirectoryPickerProps>(({ agentId }) =
           variant: 'text',
         },
       ],
-      title: t('workingDirectory.removed', { name: getDirName(entry.path) }),
+      title: t('workingDirectory.removed', {
+        name: getWorkingDirectoryName(entry.path) ?? entry.path,
+      }),
     });
   };
 
-  const handleSetDefault = (e: React.MouseEvent, entry: WorkingDirEntry) => {
+  const handleToggleDefault = async (
+    e: React.MouseEvent,
+    entry: WorkingDirEntry,
+    isDefault: boolean,
+  ) => {
     e.stopPropagation();
-    if (targetDeviceId) void updateDeviceCwd(targetDeviceId, entry, { setDefault: true });
+    if (!targetDeviceId) return;
+
+    try {
+      if (isDefault) await clearDeviceDefaultCwd(targetDeviceId);
+      else await updateDeviceCwd(targetDeviceId, entry, { setDefault: true });
+    } catch {
+      toast.error(t('workingDirectory.defaultUpdateFailed'));
+    }
   };
 
   const renderRow = (entry: WorkingDirEntry) => {
-    const effectivePath = getWorkingDirEffectivePath(entry);
-    const isActive = effectivePath === selectedDir;
-    const isDefault = !!deviceDefaultCwd && effectivePath === deviceDefaultCwd;
+    const sourcePath = getWorkingDirSourcePath(entry);
+    const isActive = sourcePath === selectedDir;
+    const isDefault = !!deviceDefaultCwd && sourcePath === deviceDefaultCwd;
+    const defaultActionLabel = t(
+      isDefault ? 'workingDirectory.clearDefault' : 'workingDirectory.setDefault',
+    );
     return (
       <Flexbox
         horizontal
@@ -427,7 +441,9 @@ const WorkingDirectoryPicker = memo<WorkingDirectoryPickerProps>(({ agentId }) =
         <DirIcon repoType={entry.repoType} />
         <Flexbox flex={1} style={{ minWidth: 0 }}>
           <Flexbox horizontal align={'center'} gap={6}>
-            <div className={styles.dirName}>{getDirName(entry.path)}</div>
+            <div className={styles.dirName}>
+              {getWorkingDirectoryName(entry.path) ?? entry.path}
+            </div>
             {isDefault && (
               <span className={styles.badge}>{t('workingDirectory.defaultBadge')}</span>
             )}
@@ -435,24 +451,27 @@ const WorkingDirectoryPicker = memo<WorkingDirectoryPickerProps>(({ agentId }) =
           <div className={styles.dirPath}>{entry.path}</div>
         </Flexbox>
         <Flexbox horizontal align={'center'} gap={2} style={{ flex: 'none' }}>
-          {/* Set-as-default is offered on every non-default row — including the
-              active one (promoting the dir you're currently using to the device
-              default is the common case). Remove (X) is hidden on the active row:
-              you can't remove the selection out from under yourself. */}
+          {/* The same Star toggles the device default in both directions. Remove
+              (X) is hidden on the active row: you can't remove the selection out
+              from under yourself. */}
           <div className={cx('wd-row-actions', styles.rowActions)}>
-            {!isDefault && (
-              <Tooltip title={t('workingDirectory.setDefault')}>
-                <div className={styles.rowAction} onClick={(e) => handleSetDefault(e, entry)}>
-                  <Icon icon={StarIcon} size={13} />
-                </div>
-              </Tooltip>
-            )}
+            <ActionIcon
+              active={isDefault}
+              aria-label={defaultActionLabel}
+              aria-pressed={isDefault}
+              icon={StarIcon}
+              size={{ blockSize: 20, size: 13 }}
+              title={defaultActionLabel}
+              onClick={(e) => void handleToggleDefault(e, entry, isDefault)}
+            />
             {!isActive && (
-              <Tooltip title={t('workingDirectory.removeRecent')}>
-                <div className={styles.rowAction} onClick={(e) => handleRemoveRecent(e, entry)}>
-                  <Icon icon={XIcon} size={12} />
-                </div>
-              </Tooltip>
+              <ActionIcon
+                aria-label={t('workingDirectory.removeRecent')}
+                icon={XIcon}
+                size={{ blockSize: 20, size: 12 }}
+                title={t('workingDirectory.removeRecent')}
+                onClick={(e) => handleRemoveRecent(e, entry)}
+              />
             )}
           </div>
           {isActive && (
@@ -513,7 +532,9 @@ const WorkingDirectoryPicker = memo<WorkingDirectoryPickerProps>(({ agentId }) =
     </Flexbox>
   );
 
-  const displayName = selectedDir ? getDirName(selectedDir) : t('workingDirectory.notSet');
+  const displayName = selectedDir
+    ? (getWorkingDirectoryName(selectedDir) ?? selectedDir)
+    : t('workingDirectory.title');
 
   const trigger = (
     <div className={styles.button}>
@@ -540,7 +561,7 @@ const WorkingDirectoryPicker = memo<WorkingDirectoryPickerProps>(({ agentId }) =
         {open ? (
           trigger
         ) : (
-          <Tooltip title={selectedDir || t('workingDirectory.notSet')}>{trigger}</Tooltip>
+          <Tooltip title={selectedDir || t('workingDirectory.title')}>{trigger}</Tooltip>
         )}
       </div>
     </Popover>

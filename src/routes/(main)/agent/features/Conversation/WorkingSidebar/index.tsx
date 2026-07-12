@@ -10,6 +10,7 @@ import { useRepoType } from '@/features/ChatInput/ControlBar/useRepoType';
 import RightPanel from '@/features/RightPanel';
 import { resolveTargetDeviceId } from '@/helpers/agentWorkingDirectory';
 import { resolveExecutionTarget } from '@/helpers/executionTarget';
+import { useIsGatewayModeEnabled } from '@/helpers/gatewayMode';
 import { useEffectiveWorkingDirectory } from '@/hooks/useEffectiveWorkingDirectory';
 import { useLocalStorageState } from '@/hooks/useLocalStorageState';
 import { useAgentStore } from '@/store/agent';
@@ -20,6 +21,8 @@ import {
 } from '@/store/agent/selectors';
 import { useElectronStore } from '@/store/electron';
 import { useGlobalStore } from '@/store/global';
+import { useUserStore } from '@/store/user';
+import { labPreferSelectors } from '@/store/user/selectors';
 
 import Files from './Files';
 import ProgressSection from './ProgressSection';
@@ -27,6 +30,7 @@ import ResourcesSection from './ResourcesSection';
 import Review from './Review';
 
 const ParamsSection = lazy(() => import('./ParamsSection'));
+const BrowserPane = lazy(() => import('./Browser'));
 
 const styles = createStaticStyles(({ css, cssVar }) => ({
   body: css`
@@ -77,7 +81,7 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
   `,
 }));
 
-type Tab = 'files' | 'params' | 'review' | 'resources';
+type Tab = 'browser' | 'files' | 'params' | 'review' | 'resources';
 
 const REVIEW_TREE_STORAGE_KEY = 'lobechat-review-tree';
 const DEFAULT_PANEL_WIDTH = 360;
@@ -87,6 +91,10 @@ const TWO_PANE_MIN_WIDTH = 560;
 const AgentWorkingSidebar = memo(() => {
   const { t } = useTranslation(['chat', 'setting']);
   const toggleRightPanel = useGlobalStore((s) => s.toggleRightPanel);
+  // Panel open/collapsed state (drives the `<RightPanel>` expand). Used to gate
+  // the resources pane's document fetch so a collapsed sidebar doesn't pull the
+  // full agent-document list into the conversation's initial batch.
+  const showRightPanel = useGlobalStore((s) => s.status.showRightPanel);
   const setWorkingSidebarTab = useGlobalStore((s) => s.setWorkingSidebarTab);
   const storedTab = useGlobalStore((s) => s.status.workingSidebarTab);
   const activeAgentId = useAgentStore((s) => s.activeAgentId);
@@ -110,9 +118,15 @@ const AgentWorkingSidebar = memo(() => {
   const currentDeviceId = useElectronStore((s) => s.gatewayDeviceInfo?.deviceId);
   const targetDeviceId = resolveTargetDeviceId(agencyConfig, currentDeviceId);
   const repoType = useRepoType(workingDirectory, targetDeviceId);
+  const deviceRoutingAvailable = useIsGatewayModeEnabled(activeAgentId);
+  const isWorkspaceAgent = useAgentStore((s) =>
+    activeAgentId ? agentByIdSelectors.isWorkspaceAgentById(activeAgentId)(s) : false,
+  );
   const effectiveTarget = resolveExecutionTarget(agencyConfig, {
-    isHetero,
     clientExecutionAvailable: isDesktop,
+    deviceRoutingAvailable,
+    isHetero,
+    workspaceScoped: isWorkspaceAgent,
   });
 
   // Running against a bound device (remote, or this machine as a device): file
@@ -131,10 +145,16 @@ const AgentWorkingSidebar = memo(() => {
   const reviewAvailable =
     (isLocalSystemEnabled || isDeviceMode) && !!workingDirectory && !!repoType;
   const paramsAvailable = !isHetero;
+  // The in-app browser rides on the Electron <webview> tag — desktop only,
+  // and gated behind the Labs toggle while the feature matures.
+  const enableInAppBrowser = useUserStore(labPreferSelectors.enableInAppBrowser);
+  const browserAvailable = isDesktop && enableInAppBrowser;
+  const browserSessionId = `agent:${activeAgentId ?? 'default'}`;
   const resolveActiveTab = (): Tab => {
     if (storedTab === 'params' && paramsAvailable) return 'params';
     if (storedTab === 'review' && reviewAvailable) return 'review';
     if (storedTab === 'files' && filesAvailable) return 'files';
+    if (storedTab === 'browser' && browserAvailable) return 'browser';
     if (storedTab === 'resources') return 'resources';
     if (isHetero) return 'resources';
     if (reviewAvailable) return 'review';
@@ -152,6 +172,12 @@ const AgentWorkingSidebar = memo(() => {
     false,
   );
   const [panelWidth, setPanelWidth] = useState<number | string>(DEFAULT_PANEL_WIDTH);
+  // Mount the browser pane on first activation only (no eager page load), then
+  // keep it mounted-but-hidden so the page survives tab switches.
+  const [browserActivated, setBrowserActivated] = useState(false);
+  useEffect(() => {
+    if (activeTab === 'browser') setBrowserActivated(true);
+  }, [activeTab]);
   const reviewTwoPane = activeTab === 'review' && reviewAvailable && showReviewTree;
   useEffect(() => {
     if (!reviewTwoPane) return;
@@ -210,6 +236,15 @@ const AgentWorkingSidebar = memo(() => {
                 {t('workingPanel.files.title')}
               </button>
             )}
+            {browserAvailable && (
+              <button
+                className={`${styles.tab} ${activeTab === 'browser' ? styles.tabActive : ''}`}
+                type="button"
+                onClick={() => setWorkingSidebarTab('browser')}
+              >
+                {t('workingPanel.browser.title')}
+              </button>
+            )}
             {paramsAvailable && (
               <button
                 className={`${styles.tab} ${activeTab === 'params' ? styles.tabActive : ''}`}
@@ -235,6 +270,7 @@ const AgentWorkingSidebar = memo(() => {
           {reviewAvailable && (
             <Flexbox className={activeTab === 'review' ? styles.pane : styles.paneHidden}>
               <Review
+                active={activeTab === 'review'}
                 deviceId={remoteDeviceId}
                 showTree={showReviewTree}
                 workingDirectory={workingDirectory}
@@ -247,13 +283,24 @@ const AgentWorkingSidebar = memo(() => {
               <Files deviceId={remoteDeviceId} workingDirectory={workingDirectory} />
             </Flexbox>
           )}
+          {browserAvailable && browserActivated && (
+            <Flexbox className={activeTab === 'browser' ? styles.pane : styles.paneHidden}>
+              {/* Keyed by session: the pane holds per-session local state (webview,
+              address bar), so an agent switch must remount it rather than leak the
+              previous agent's page into the new agent's session. */}
+              <BrowserPane key={browserSessionId} sessionId={browserSessionId} />
+            </Flexbox>
+          )}
           <Flexbox
             className={activeTab === 'resources' ? styles.pane : styles.paneHidden}
             gap={8}
             width={'100%'}
           >
             <ProgressSection />
-            <ResourcesSection deviceId={remoteDeviceId} />
+            <ResourcesSection
+              deviceId={remoteDeviceId}
+              enabled={showRightPanel && activeTab === 'resources'}
+            />
           </Flexbox>
         </Flexbox>
       </Flexbox>

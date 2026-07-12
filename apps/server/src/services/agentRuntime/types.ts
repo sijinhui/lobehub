@@ -181,7 +181,8 @@ export interface AgentExecutionParams {
 export interface AgentExecutionResult {
   /**
    * When true, the step was already being executed by another instance (lock conflict).
-   * The caller should return 429 to force QStash to retry later.
+   * Stale duplicates are handled before returning this; callers should keep
+   * this response retryable so fresh deliveries can run after the lock clears.
    */
   locked?: boolean;
   nextStepScheduled: boolean;
@@ -316,6 +317,13 @@ export interface ExecGroupMemberResult {
 
 export interface OperationCreationParams {
   activeDeviceId?: string;
+  /**
+   * Principal pool the routed `activeDeviceId` lives in. `personal` when a
+   * workspace run was routed to the caller's own device via a per-user
+   * `local` override — device runtimes must then address it through the
+   * personal `(userId, deviceId)` pool instead of the `workspace:<id>` pool.
+   */
+  activeDeviceScope?: 'personal' | 'workspace';
   agentConfig?: any;
   /**
    * Multi-agent group (or bot-conversation fallback) context, resolved once at

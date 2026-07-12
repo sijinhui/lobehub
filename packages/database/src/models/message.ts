@@ -69,6 +69,7 @@ import {
   messageTranslates,
   messageTTS,
   threads,
+  users,
 } from '../schemas';
 import type { LobeChatDatabase, Transaction } from '../type';
 import { sanitizeBm25Query } from '../utils/bm25';
@@ -526,6 +527,13 @@ export class MessageModel {
             agentId: messages.agentId,
             targetId: messages.targetId,
 
+            sender: {
+              avatar: users.avatar,
+              fullName: users.fullName,
+              id: users.id,
+              username: users.username,
+            },
+
             tools: messages.tools,
             tool_call_id: messagePlugins.toolCallId,
 
@@ -562,6 +570,7 @@ export class MessageModel {
           .leftJoin(messagePlugins, eq(messagePlugins.id, messages.id))
           .leftJoin(messageTranslates, eq(messageTranslates.id, messages.id))
           .leftJoin(messageTTS, eq(messageTTS.id, messages.id))
+          .leftJoin(users, eq(users.id, messages.userId))
           .orderBy(asc(messages.createdAt))
           .limit(pageSize)
           .offset(offset),
@@ -626,12 +635,27 @@ export class MessageModel {
       'db.message.queryWithWhere.transform',
       () =>
         result.map(
-          ({ model, provider, translate, ttsId, ttsFile, ttsContentMd5, ttsVoice, ...item }) => {
+          ({
+            model,
+            provider,
+            translate,
+            ttsId,
+            ttsFile,
+            ttsContentMd5,
+            ttsVoice,
+            sender,
+            ...item
+          }) => {
             const messageQuery = messageQueriesList.find(
               (relation) => relation.messageId === item.id,
             );
             return {
               ...item,
+              // LEFT JOIN → users row is null only when the sender account was
+              // deleted (rare, since `messages.user_id` cascades on user delete).
+              // Collapse a null-id sender to `null` so the client can rely on
+              // `sender?.id` as the presence check.
+              sender: sender?.id ? sender : null,
               chunksList: chunksList
                 .filter((relation) => relation.messageId === item.id)
                 .map((c) => ({
@@ -1915,6 +1939,8 @@ export class MessageModel {
   ) => {
     // Ensure group message does not populate sessionId
     const normalizedMessage = message.groupId ? { ...message, sessionId: null } : message;
+    const { usage: legacyUsage, ...metadata } =
+      (normalizedMessage.metadata as Record<string, any> | undefined) || {};
 
     return buildWorkspacePayload(
       { userId: this.userId, workspaceId: this.workspaceId },
@@ -1925,14 +1951,13 @@ export class MessageModel {
         // TODO: remove this when the client is updated
         createdAt: createdAt ? new Date(createdAt) : undefined,
         id,
+        metadata: normalizedMessage.metadata ? metadata : undefined,
         model: fromModel,
         provider: fromProvider,
         updatedAt: updatedAt ? new Date(updatedAt) : undefined,
         // Promote token usage into the dedicated `usage` column, preferring a
         // top-level `usage` over the legacy `metadata.usage`.
-        usage:
-          normalizedMessage.usage ??
-          (normalizedMessage.metadata as { usage?: ModelUsage } | undefined)?.usage,
+        usage: normalizedMessage.usage ?? (legacyUsage as ModelUsage | undefined),
       },
     );
   };
@@ -2176,19 +2201,15 @@ export class MessageModel {
     { imageList, metadata, usage, ...message }: Partial<UpdateMessageParams>,
     timing?: ModelTimingContext,
   ): Promise<{ success: boolean }> => {
-    // Promote token usage into the dedicated `usage` column. Prefer a top-level
-    // `usage` payload, falling back to `metadata.usage` so existing writers
-    // (Gateway / hetero-agent executors) keep populating the column without
-    // changes. `metadata.usage` is still written for backward-compatible reads.
-    const usageToWrite = usage ?? (metadata as { usage?: ModelUsage } | undefined)?.usage;
-    // Keep `metadata.usage` dual-written even when usage arrives as a top-level
-    // param (with no metadata payload) — legacy readers / rollback paths still
-    // consume it during the transition. Folding the resolved usage into the
-    // patch also keeps it consistent with the column when both are sent.
-    const metadataPatch =
-      metadata || usageToWrite
-        ? { ...metadata, ...(usageToWrite && { usage: usageToWrite }) }
-        : undefined;
+    // Accept legacy callers that still send `metadata.usage`, but persist usage
+    // exclusively in the dedicated top-level column.
+    const { usage: legacyUsage, ...metadataPatch } = (metadata as Record<string, any>) || {};
+    const usageToWrite = usage ?? (legacyUsage as ModelUsage | undefined);
+    const shouldUpdateMetadata = !!metadata || !!usageToWrite;
+    // A patch that matches no row is a lost write, not a no-op: the caller asked
+    // to persist content onto `id` and it went nowhere. Batched writers key their
+    // retry ledger off this flag, so reporting success here silently drops data.
+    let matchedRow = false;
     try {
       await runTimedStage(
         timing,
@@ -2213,10 +2234,10 @@ export class MessageModel {
               );
             }
 
-            // 2. Handle metadata merge if there's a metadata payload or a
-            // top-level usage to fold back into `metadata.usage`.
+            // 2. Merge non-usage metadata. A usage-bearing update also removes
+            // any legacy `metadata.usage` left on the existing row.
             let mergedMetadata: Record<string, any> | undefined;
-            if (metadataPatch) {
+            if (shouldUpdateMetadata) {
               const [existingMessage] = await runTimedStage(
                 timing,
                 'db.message.update.metadata.select',
@@ -2227,7 +2248,9 @@ export class MessageModel {
                     .where(and(eq(messages.id, id), this.ownership())),
               );
               mergedMetadata = merge(existingMessage?.metadata || {}, metadataPatch);
+              if (usageToWrite && mergedMetadata) delete mergedMetadata.usage;
             }
+            const metadataToWrite = mergedMetadata;
 
             const [updated] = await runTimedStage(
               timing,
@@ -2237,13 +2260,15 @@ export class MessageModel {
                   .update(messages)
                   .set({
                     ...message,
-                    ...(mergedMetadata && { metadata: mergedMetadata }),
+                    ...(metadataToWrite && { metadata: metadataToWrite }),
                     ...(usageToWrite && { usage: usageToWrite }),
                   })
                   .where(and(eq(messages.id, id), this.ownership()))
                   .returning({ topicId: messages.topicId }),
               { hasMetadata: !!metadataPatch, valueKeys: Object.keys(message) },
             );
+
+            matchedRow = !!updated;
 
             if (
               updated?.topicId && // When this write carries token usage (assistant finalize / hetero
@@ -2262,10 +2287,15 @@ export class MessageModel {
           }),
         {
           hasImageList: !!imageList?.length,
-          hasMetadata: !!metadataPatch,
+          hasMetadata: shouldUpdateMetadata,
           valueKeys: Object.keys(message),
         },
       );
+
+      if (!matchedRow) {
+        console.error(`Update message error: no message matched id ${id}`);
+        return { success: false };
+      }
 
       return { success: true };
     } catch (error) {
@@ -2281,10 +2311,9 @@ export class MessageModel {
 
     if (!item) return;
 
-    const mergedMetadata = merge(item.metadata || {}, metadata);
-    // Keep the dedicated `usage` column in sync when the merged metadata carries
-    // token usage, preferring it over the existing column value.
-    const usageToWrite = (metadata as { usage?: ModelUsage } | undefined)?.usage;
+    const { usage: usageToWrite, ...metadataPatch } = metadata as Record<string, any>;
+    const mergedMetadata = merge(item.metadata || {}, metadataPatch);
+    if (usageToWrite) delete mergedMetadata.usage;
 
     return this.db
       .update(messages)
@@ -2403,6 +2432,10 @@ export class MessageModel {
   ): Promise<{ success: boolean }> => {
     const { content, metadata, pluginState, pluginError } = params;
 
+    // `undefined` while no branch has looked for the row yet; see `update` above
+    // for why a write that matches nothing must not report success.
+    let matchedRow: boolean | undefined;
+
     try {
       await this.db.transaction(async (trx) => {
         // Update messages table (content, metadata)
@@ -2422,10 +2455,13 @@ export class MessageModel {
           }
 
           if (Object.keys(messageUpdateData).length > 0) {
-            await trx
+            const [updated] = await trx
               .update(messages)
               .set(messageUpdateData)
-              .where(and(eq(messages.id, id), this.ownership()));
+              .where(and(eq(messages.id, id), this.ownership()))
+              .returning({ id: messages.id });
+
+            matchedRow = !!updated;
           }
         }
 
@@ -2434,6 +2470,10 @@ export class MessageModel {
           const pluginItem = await trx.query.messagePlugins.findFirst({
             where: and(eq(messagePlugins.id, id), this.pluginsOwnership()),
           });
+
+          // A plugin-only patch never touches `messages`, so the plugin row is
+          // the only evidence the tool message exists.
+          if (matchedRow === undefined) matchedRow = !!pluginItem;
 
           if (pluginItem) {
             const pluginUpdateData: Record<string, any> = {};
@@ -2455,6 +2495,11 @@ export class MessageModel {
           }
         }
       });
+
+      if (matchedRow === false) {
+        console.error(`Update tool message error: no tool message matched id ${id}`);
+        return { success: false };
+      }
 
       return { success: true };
     } catch (error) {
@@ -2551,10 +2596,11 @@ export class MessageModel {
    * needed: a topic runs at most one operation at a time, so the latest spine
    * message IS this run's continuation point.
    *
-   * Excludes `role:'tool'` (inline children) and signal-tagged assistants
-   * (`metadata->'signal'`), which are tool-child callbacks — anchoring a normal
-   * turn onto a callback would orphan it under the read side's tool-only signal
-   * collection.
+   * Excludes `role:'tool'` (inline children) and TOOLLESS signal-tagged
+   * assistants (`metadata->'signal'` with no tools), which are tool-child
+   * callbacks — anchoring a normal turn onto a callback would orphan it under
+   * the read side's tool-only signal collection. A signal turn that DID emit
+   * tools is back on the main chain and stays a spine candidate.
    */
   getLastMainThreadSpineMessageId = async (topicId: string): Promise<string | undefined> =>
     this.getLatestSpineMessageId({ topicId, threadId: null });
@@ -2565,10 +2611,11 @@ export class MessageModel {
    * NOT a signal-tagged reactive turn) in a topic, scoped to the main thread
    * (`threadId IS NULL`) or to a specific thread.
    *
-   * Like the main-thread query it EXCLUDES `role:'tool'` and signal-tagged
-   * assistants: tools are inline children of their assistant turn, so the
-   * conversation head a new turn parents off is the assistant, never the tool
-   * result that landed under it.
+   * Like the main-thread query it EXCLUDES `role:'tool'` and TOOLLESS
+   * signal-tagged assistants: tools are inline children of their assistant turn,
+   * so the conversation head a new turn parents off is the assistant, never the
+   * tool result that landed under it. A tools-bearing signal turn is main-chain
+   * and remains a spine candidate.
    *
    * Used by `sendMessageInServer` to make `parentId` server-authoritative and
    * close the concurrent-append race: the client computes `parentId` from a
@@ -2592,13 +2639,63 @@ export class MessageModel {
           eq(messages.topicId, topicId),
           not(eq(messages.role, 'tool')),
           threadId ? eq(messages.threadId, threadId) : isNull(messages.threadId),
-          // Exclude signal-tagged assistants by key existence. The equivalent
-          // `metadata -> 'signal' IS NULL` crashes the serverless Postgres engine
-          // when used as a WHERE predicate (rt_fetch out-of-bounds, SQLSTATE
-          // XX000) — the `->` operator only survives in the SELECT/ORDER BY
-          // position, not as a filter qual. `jsonb_exists` is GIN-friendly and
-          // equivalent for real data, since the signal tag is always an object.
-          sql`NOT COALESCE(jsonb_exists(${messages.metadata}, 'signal'), false)`,
+          // Exclude signal-tagged assistants — BUT only the toolless ones. The
+          // writer tags a turn `signal` at stream_start before it knows the turn
+          // will call tools; a signal turn that DOES emit a tool_use is really
+          // back on the main chain (see `reduceToolsChunk`'s spine promotion),
+          // so it must stay a spine candidate or a cold replica re-forks the
+          // wire off the pre-signal turn. Match the read side, which likewise
+          // treats a tools-bearing message as non-signal (`getMessageSignal`).
+          //
+          // Key existence (`jsonb_exists`) is used instead of `metadata -> 'signal'
+          // IS NULL`, which crashes the serverless Postgres engine as a WHERE
+          // predicate (rt_fetch out-of-bounds, SQLSTATE XX000 — the `->` operator
+          // only survives in SELECT/ORDER BY). Toolless is expressed with plain
+          // jsonb equality (`= '[]'` / IS NULL) rather than `jsonb_array_length`,
+          // which is unproven on this engine as a qual.
+          sql`NOT (
+            COALESCE(jsonb_exists(${messages.metadata}, 'signal'), false)
+            AND (${messages.tools} IS NULL OR ${messages.tools} = '[]'::jsonb)
+          )`,
+          this.ownership(),
+        ),
+      )
+      .orderBy(desc(messages.createdAt))
+      .limit(1);
+
+    return row?.id;
+  };
+
+  /**
+   * Fallback anchor for {@link getLatestSpineMessageId}: the latest non-tool
+   * message in a topic/thread, WITHOUT the toolless-signal exclusion.
+   *
+   * A topic whose main thread holds nothing but toolless signal turns has no
+   * spine candidate, so the spine lookup returns undefined and the caller would
+   * persist the new turn with `parentId: undefined` — a second root that forks
+   * the conversation tree. The renderer walks that forest depth-first, so an
+   * earlier root's long-running subtree gets emitted before a later root and the
+   * newest reply surfaces ABOVE older messages (LOBE-11489).
+   *
+   * `role:'tool'` stays excluded: tool results are inline children of their
+   * assistant turn, and anchoring a normal turn onto one orphans it under the
+   * read side's tool-only signal collection.
+   */
+  getLatestNonToolMessageId = async ({
+    topicId,
+    threadId,
+  }: {
+    threadId?: string | null;
+    topicId: string;
+  }): Promise<string | undefined> => {
+    const [row] = await this.db
+      .select({ id: messages.id })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.topicId, topicId),
+          not(eq(messages.role, 'tool')),
+          threadId ? eq(messages.threadId, threadId) : isNull(messages.threadId),
           this.ownership(),
         ),
       )
