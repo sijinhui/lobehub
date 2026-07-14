@@ -1,5 +1,5 @@
 import { AgentManagementIdentifier } from '@lobechat/builtin-tool-agent-management';
-import { LOADING_FLAT } from '@lobechat/const';
+import { HETERO_CONTINUE_PROMPT, LOADING_FLAT } from '@lobechat/const';
 import type {
   ChatImageItem,
   ConversationContext,
@@ -10,6 +10,7 @@ import { type StateCreator } from 'zustand';
 
 import { message as antdMessage } from '@/components/AntdStaticMethods';
 import { MESSAGE_CANCEL_FLAT } from '@/const/index';
+import { saveDraft } from '@/features/ChatInput/draftStorage';
 import { isHeterogeneousAgentStatusGuideError } from '@/features/Conversation/Error/heterogeneous';
 import { messageService } from '@/services/message';
 import { getAgentStoreState } from '@/store/agent';
@@ -29,6 +30,7 @@ import {
   mergeAgentRuntimeInitialContexts,
   resolveActiveTopicDocumentInitialContext,
 } from '@/store/chat/utils/activeTopicDocumentContext';
+import { messageMapKey } from '@/store/chat/utils/messageMapKey';
 import { getElectronStoreState } from '@/store/electron';
 
 import { type Store as ConversationStore } from '../../action';
@@ -94,9 +96,6 @@ const settleGenerationEntry = (
  * completed step (we resume the same session id), so the instruction only has to
  * stop the model from redoing them. Not localized: it is model input, not UI.
  */
-const HETERO_CONTINUE_PROMPT =
-  'Continue the task from where it stopped. The transcript above shows the work already completed — do not redo it.';
-
 /**
  * Where a hetero (Claude Code / Codex) run should execute, and whether it can
  * pick up the topic's existing CLI session.
@@ -209,16 +208,34 @@ const runHeterogeneousFromExistingMessage = async (
   return assistantMsg.id;
 };
 
+export interface HeteroContinuationScheduleParams {
+  failedAssistantMessageId: string;
+  rateLimit?: {
+    rateLimitType?: string;
+    resetsAt?: number;
+  };
+}
+
 /**
  * Generation Actions
  *
  * Handles generation control (stop, cancel, regenerate, continue)
  */
 export interface GenerationAction {
+  cancelHeteroContinuation: () => Promise<void>;
   /**
    * Cancel a specific operation
    */
   cancelOperation: (operationId: string, reason?: string) => void;
+  /**
+   * Cancel a user-deferred run ("send this in 3 hours") before it fires.
+   *
+   * Distinct from {@link cancelHeteroContinuation}, which parks the topic at
+   * `failed` because it is cancelling the retry of a turn that already failed.
+   * Nothing has failed here — the topic drops back to `active` and keeps the
+   * pending user message, so the user can send it now or delete the topic.
+   */
+  cancelScheduledRun: () => Promise<void>;
 
   /**
    * Clear all operations
@@ -332,6 +349,8 @@ export interface GenerationAction {
    */
   resetHeteroOverloadRetry: (scopeId: string) => void;
 
+  scheduleHeteroContinuation: (params: HeteroContinuationScheduleParams) => Promise<void>;
+
   /**
    * Stop current generation
    */
@@ -359,6 +378,60 @@ export const generationSlice: StateCreator<
   [],
   GenerationAction
 > = (set, get) => ({
+  cancelHeteroContinuation: async () => {
+    const topicId = get().context.topicId;
+    if (!topicId) return;
+
+    const chatStore = useChatStore.getState();
+    await chatStore.updateTopicStatus({ status: 'failed', topicId });
+    await chatStore.updateTopicMetadata(topicId, { scheduledRun: null });
+  },
+  cancelScheduledRun: async () => {
+    const { context, dbMessages, editor } = get();
+    const topicId = context.topicId;
+    if (!topicId) return;
+
+    const chatStore = useChatStore.getState();
+    const topic = topicSelectors.getTopicById(topicId)(chatStore);
+    const scheduledRun = topic?.metadata?.scheduledRun;
+    const userMessageId =
+      scheduledRun?.kind === 'delayed_start' ? scheduledRun.userMessageId : undefined;
+    // Capture the text before anything is deleted — cancelling a scheduled send
+    // hands the user's words back to the composer rather than discarding them.
+    const pendingContent = userMessageId
+      ? dbMessages.find((message) => message.id === userMessageId)?.content
+      : undefined;
+
+    await chatStore.updateTopicStatus({ status: 'active', topicId });
+    await chatStore.updateTopicMetadata(topicId, { scheduledRun: null });
+
+    // A `delayed_start` topic exists solely to hold the deferred turn, so once
+    // that turn is cancelled the topic has nothing left in it — drop it instead
+    // of stranding an empty row in the sidebar. Guarded on the message count so
+    // a topic that somehow holds other turns keeps them and only loses the
+    // pending one.
+    const isOnlyMessage = dbMessages.length === 1 && dbMessages[0]?.id === userMessageId;
+
+    if (pendingContent && editor) {
+      // Load the text into the live editor first — that is also how we get it in
+      // the editor's own JSON shape, which is the only thing a draft can carry.
+      editor.setDocument('markdown', pendingContent);
+
+      if (isOnlyMessage) {
+        // Deleting the topic navigates back to the agent's compose surface, which
+        // mounts a DIFFERENT ChatInput — anything written to the editor we hold
+        // here dies with it. Stash the text as that surface's draft instead; the
+        // new composer restores it on mount. (Re-reading `get().editor` after the
+        // switch doesn't work either: the new instance hasn't registered yet.)
+        saveDraft(messageMapKey({ ...context, topicId: null }), editor.getJSONState());
+      } else {
+        editor.focus();
+      }
+    }
+
+    if (isOnlyMessage) await chatStore.removeTopic(topicId);
+    else if (userMessageId) await get().deleteMessage(userMessageId);
+  },
   cancelOperation: (operationId: string, reason?: string) => {
     const state = get();
     const { hooks } = state;
@@ -583,6 +656,49 @@ export const generationSlice: StateCreator<
       });
       throw error;
     }
+  },
+
+  scheduleHeteroContinuation: async ({ failedAssistantMessageId, rateLimit }) => {
+    const { context, dbMessages } = get();
+    const topicId = context.topicId;
+    if (!topicId) return;
+
+    const messagesById = new Map(dbMessages.map((message) => [message.id, message]));
+    let ancestor = messagesById.get(failedAssistantMessageId);
+    while (ancestor?.parentId && ancestor.role !== 'user') {
+      ancestor = messagesById.get(ancestor.parentId);
+    }
+    const userMessageId = ancestor?.role === 'user' ? ancestor.id : undefined;
+    if (!userMessageId) return;
+
+    const chatStore = useChatStore.getState();
+    const topic = topicSelectors.getTopicById(topicId)(chatStore);
+    const nowDate = new Date();
+    const now = nowDate.toISOString();
+    // The rate-limit reset is the "not before" gate. Absent (some providers don't
+    // report one) means "retry on the next tick" — never "already due", which is
+    // why `runAt` is always written.
+    const runAt = rateLimit?.resetsAt
+      ? new Date(rateLimit.resetsAt * 1000).toISOString()
+      : nowDate.toISOString();
+
+    await chatStore.updateTopicMetadata(topicId, {
+      scheduledRun: {
+        createdAt: now,
+        failedAssistantMessageId,
+        kind: 'resume_after_rate_limit',
+        rateLimit,
+        resume: {
+          sessionId: topic?.metadata?.heteroSessionId,
+          workingDirectory: topic?.metadata?.workingDirectory,
+        },
+        runAt,
+        source: 'heterogeneous_agent',
+        updatedAt: now,
+        userMessageId,
+      },
+    });
+    await chatStore.updateTopicStatus({ status: 'scheduled', topicId });
   },
 
   delAndRegenerateMessage: async (messageId: string) => {

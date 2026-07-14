@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 
+import { OFFICIAL_DEVICE_GATEWAY_URL } from '@lobechat/const/url';
 import type {
   EnrollWorkspaceParams,
   EnrollWorkspaceResult,
@@ -30,7 +31,7 @@ import { ServiceModule } from './index';
 
 const logger = createLogger('services:GatewayConnectionSrv');
 
-const DEFAULT_GATEWAY_URL = 'https://device-gateway.lobehub.com';
+const DEFAULT_GATEWAY_URL = OFFICIAL_DEVICE_GATEWAY_URL;
 
 /**
  * Result envelope a tool-call handler must return. Mirrors
@@ -50,7 +51,7 @@ interface MessageApiHandler {
 }
 
 interface ToolCallHandler {
-  (apiName: string, args: unknown): Promise<ToolCallResult>;
+  (identifier: string | undefined, apiName: string, args: unknown): Promise<ToolCallResult>;
 }
 
 /**
@@ -783,7 +784,7 @@ export default class GatewayConnectionService extends ServiceModule {
           throw new Error('No tool call handler configured');
         }
         const args = JSON.parse(argsStr);
-        result = await this.toolCallHandler(apiName, args);
+        result = await this.toolCallHandler(identifier, apiName, args);
       }
 
       // Forward the typed envelope unchanged. Critically, do NOT stringify the

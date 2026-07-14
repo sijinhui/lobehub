@@ -21,7 +21,7 @@ import {
   Text,
 } from '@lobehub/ui';
 import { Button } from '@lobehub/ui/base-ui';
-import { createStaticStyles, cssVar } from 'antd-style';
+import { createStaticStyles, cssVar, cx } from 'antd-style';
 import type { TFunction } from 'i18next';
 import {
   AlertTriangle,
@@ -74,7 +74,7 @@ const styles = createStaticStyles(({ css }) => ({
   `,
   page: css`
     width: 100%;
-    max-width: 1180px;
+    max-width: 880px;
     margin-inline: auto;
     padding-block: 32px 64px;
     padding-inline: 32px;
@@ -700,6 +700,63 @@ const styles = createStaticStyles(({ css }) => ({
 
     max-width: 70ch;
   `,
+  comparison: css`
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    width: 100%;
+
+    @media (width <= 640px) {
+      grid-template-columns: 1fr;
+    }
+  `,
+  /* Wide, short captures (a toolbar, a one-line footer) get halved into
+     illegible slivers by the two-column grid — stack them instead. */
+  comparisonVertical: css`
+    grid-template-columns: 1fr;
+  `,
+  comparisonItem: css`
+    overflow: hidden;
+
+    min-width: 0;
+    border: 1px solid ${cssVar.colorBorderSecondary};
+    border-radius: ${cssVar.borderRadius};
+
+    background: ${cssVar.colorBgContainer};
+  `,
+  /* The role rides on a tinted band fused to its own screenshot, so which state
+     you're looking at survives being read at a glance — a neutral heading above
+     the image reads as a caption for the whole pair. */
+  comparisonLabel: css`
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+
+    padding-block: 7px;
+    padding-inline: 10px;
+
+    font-size: 12px;
+  `,
+  comparisonLabelBefore: css`
+    border-block-end: 1px solid ${cssVar.colorErrorBorder};
+    color: ${cssVar.colorErrorText};
+    background: ${cssVar.colorErrorBg};
+  `,
+  comparisonLabelAfter: css`
+    border-block-end: 1px solid ${cssVar.colorSuccessBorder};
+    color: ${cssVar.colorSuccessText};
+    background: ${cssVar.colorSuccessBg};
+  `,
+  comparisonRole: css`
+    flex: none;
+    font-weight: 600;
+  `,
+  /* The two captions are themselves a before/after contrast, so they must stay
+     readable side by side — wrap rather than ellipsize. */
+  comparisonCaption: css`
+    min-width: 0;
+    opacity: 0.85;
+  `,
   evidenceFile: css`
     cursor: pointer;
 
@@ -1014,6 +1071,42 @@ const evidenceDisplayName = (
   evidence.description ||
   t('report.evidence.inlineFallback', { index });
 
+interface EvidenceComparison {
+  id: string;
+  label?: string;
+  /**
+   * How the pair is arranged. Side by side reads best for tall, narrow captures
+   * (a sidebar, a form); stacking is the only way a wide, short strip (a toolbar,
+   * a one-line footer) stays legible, since two of them side by side halve an
+   * already-thin band. Authors pick per pair; defaults to side by side.
+   */
+  layout: 'horizontal' | 'vertical';
+  role: 'after' | 'before';
+}
+
+const evidenceComparison = (evidence: VerifyEvidenceWithUrl): EvidenceComparison | null => {
+  const metadata = toRecord(evidence.metadata);
+  if (!metadata) return null;
+
+  const comparison = toRecord(metadata.comparison);
+  if (!comparison) return null;
+
+  const role = comparison.role;
+  if (
+    typeof comparison.id !== 'string' ||
+    (role !== 'before' && role !== 'after') ||
+    !isInlineVisualEvidence(evidence)
+  )
+    return null;
+
+  return {
+    id: comparison.id,
+    label: typeof comparison.label === 'string' ? comparison.label : undefined,
+    layout: comparison.layout === 'vertical' ? 'vertical' : 'horizontal',
+    role,
+  };
+};
+
 /** A file-backed text evidence, decoded + syntax highlighted (avoids mojibake). */
 const DocumentViewer = memo<{ fileName?: string | null; url: string }>(({ fileName, url }) => {
   const { t } = useTranslation('verify');
@@ -1274,6 +1367,46 @@ const EvidenceDrawer = memo<{
 
 EvidenceItem.displayName = 'EvidenceItem';
 
+const EvidenceComparisonView = memo<{
+  after: VerifyEvidenceWithUrl;
+  before: VerifyEvidenceWithUrl;
+}>(({ after, before }) => {
+  const { t } = useTranslation('verify');
+
+  // Either half may carry the layout; the `before` one wins so a pair can't
+  // render as two different arrangements.
+  const layout = evidenceComparison(before)?.layout ?? evidenceComparison(after)?.layout;
+
+  return (
+    <div className={cx(styles.comparison, layout === 'vertical' && styles.comparisonVertical)}>
+      {[before, after].map((evidence, index) => {
+        const comparison = evidenceComparison(evidence)!;
+        const isBefore = comparison.role === 'before';
+        return (
+          <div className={styles.comparisonItem} key={evidence.id}>
+            <div
+              className={cx(
+                styles.comparisonLabel,
+                isBefore ? styles.comparisonLabelBefore : styles.comparisonLabelAfter,
+              )}
+            >
+              <span className={styles.comparisonRole}>
+                {t(`report.evidence.comparison.${comparison.role}`)}
+              </span>
+              {comparison.label && (
+                <span className={styles.comparisonCaption}>{comparison.label}</span>
+              )}
+            </div>
+            <EvidenceItem evidence={evidence} index={index + 1} />
+          </div>
+        );
+      })}
+    </div>
+  );
+});
+
+EvidenceComparisonView.displayName = 'EvidenceComparisonView';
+
 EvidenceDrawer.displayName = 'EvidenceDrawer';
 
 /** One check — an expandable row; evidence opens one artifact at a time. */
@@ -1299,6 +1432,22 @@ const CheckRow = memo<{ defaultOpen: boolean; result: VerifyResultWithEvidence }
       : -1;
     const selectedEvidence =
       selectedEvidenceIndex >= 0 ? result.evidence[selectedEvidenceIndex] : null;
+    const comparisonGroups = new Map<
+      string,
+      Partial<Record<'after' | 'before', VerifyEvidenceWithUrl>>
+    >();
+    for (const evidence of result.evidence) {
+      const comparison = evidenceComparison(evidence);
+      if (!comparison) continue;
+      const group = comparisonGroups.get(comparison.id) ?? {};
+      group[comparison.role] = evidence;
+      comparisonGroups.set(comparison.id, group);
+    }
+    const pairedEvidenceIds = new Set(
+      [...comparisonGroups.values()]
+        .filter((group) => group.before && group.after)
+        .flatMap((group) => [group.before!.id, group.after!.id]),
+    );
 
     return (
       <div className={styles.row}>
@@ -1343,8 +1492,13 @@ const CheckRow = memo<{ defaultOpen: boolean; result: VerifyResultWithEvidence }
             {evidenceCount > 0 && (
               <>
                 <div className={styles.evidenceList}>
+                  {[...comparisonGroups.entries()].map(([id, group]) =>
+                    group.before && group.after ? (
+                      <EvidenceComparisonView after={group.after} before={group.before} key={id} />
+                    ) : null,
+                  )}
                   {result.evidence.map((e, index) =>
-                    isInlineEvidence(e) ? (
+                    pairedEvidenceIds.has(e.id) ? null : isInlineEvidence(e) ? (
                       <EvidenceItem evidence={e} index={index + 1} key={e.id} />
                     ) : (
                       <EvidenceFileButton
@@ -1630,6 +1784,9 @@ const ReportViewer = memo<ReportViewerProps>(({ runId: explicitRunId }) => {
         <main>
           <Flexbox gap={12}>
             <div className={styles.heroLine}>
+              <Text as={'h1'} style={{ fontSize: 24, lineHeight: 1.3, margin: 0 }}>
+                {run.title || t('report.titleFallback')}
+              </Text>
               {verdict && (
                 <span
                   className={styles.pill}
@@ -1642,9 +1799,6 @@ const ReportViewer = memo<ReportViewerProps>(({ runId: explicitRunId }) => {
                   {t(`report.verdict.${verdict}`)}
                 </span>
               )}
-              <Text as={'h1'} style={{ fontSize: 24, lineHeight: 1.3, margin: 0 }}>
-                {run.title || t('report.titleFallback')}
-              </Text>
             </div>
 
             {!isCodingReport && run.goal && <Text className={styles.summary}>{run.goal}</Text>}

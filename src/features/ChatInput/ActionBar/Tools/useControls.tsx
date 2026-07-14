@@ -7,9 +7,8 @@ import {
 import { type AgentPluginMode, getDisabledPluginIds } from '@lobechat/types';
 import type { ItemType } from '@lobehub/ui';
 import { Avatar, Icon, Popover, SearchBar, stopPropagation, Tag, Tooltip } from '@lobehub/ui';
-import { confirmModal } from '@lobehub/ui/base-ui';
+import { confirmModal, Switch } from '@lobehub/ui/base-ui';
 import { McpIcon, SkillsIcon } from '@lobehub/ui/icons';
-import { Switch } from 'antd';
 import { createStaticStyles, cssVar, cx } from 'antd-style';
 import isEqual from 'fast-deep-equal';
 import {
@@ -539,6 +538,15 @@ export const useControls = ({ closeDropdown }: { closeDropdown?: () => void } = 
           <span className={cx(styles.policyCheck)} />
         );
 
+      // Right-click / "..." menu is an action list (Pin / Auto / Disable), not a
+      // status readout — group headers still use the state labels below.
+      // `as const` keeps literal keys so `t()` stays typed against setting resources.
+      const policyActionKey = {
+        auto: 'tools.activation.action.auto',
+        disabled: 'tools.activation.action.disable',
+        pinned: 'tools.activation.action.pin',
+      } as const satisfies Record<SkillPolicyMode, string>;
+
       const renderPolicyItem = (value: SkillPolicyMode, icon: ReactNode) => (
         <button
           className={cx(styles.policyItem)}
@@ -552,7 +560,7 @@ export const useControls = ({ closeDropdown }: { closeDropdown?: () => void } = 
           }}
         >
           <span className={cx(styles.policyItemIcon)}>{icon}</span>
-          <span className={cx(styles.policyText)}>{t(`tools.activation.${value}`)}</span>
+          <span className={cx(styles.policyText)}>{t(policyActionKey[value])}</span>
           {renderCheck(value)}
         </button>
       );
@@ -2041,6 +2049,7 @@ export const useControls = ({ closeDropdown }: { closeDropdown?: () => void } = 
     autoCount: allAutoItems.length,
     editPluginDrawer,
     installedPluginItems,
+    isPolicyMenuOpen: policyOpenId !== null,
     marketFooter,
     marketHeader,
     marketItems,

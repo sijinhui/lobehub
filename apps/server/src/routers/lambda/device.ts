@@ -6,7 +6,7 @@ import type {
   DeviceWorkspaceShare,
   WorkingDirEntry,
 } from '@lobechat/types';
-import { deriveWorktreePath } from '@lobechat/types';
+import { deriveWorktreePath, workingDirConfigSchema } from '@lobechat/types';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
@@ -25,7 +25,6 @@ import { type DeviceAttachment, deviceGateway } from '@/server/services/deviceGa
 
 import { preserveWorkspaceCache } from './deviceWorkingDirs';
 import { assertWorkspaceDeviceVisible, assertWorkspaceRootApproved } from './deviceWorkspaceGuard';
-import { workingDirConfigSchema } from './workingDirSchema';
 
 // Derive the zod enum from the canonical config so new platforms are
 // automatically covered without touching this file.
@@ -1095,10 +1094,11 @@ export const deviceRouter = router({
    * Publish a private workspace device to the shared pool, or pull a public one
    * back to private. Mirrors the agent/file `setVisibility` contract:
    *   - the enrolling member may toggle their own device both ways;
-   *   - a workspace owner may demote any *visible* (public) device — other
-   *     members' private devices are invisible to owners by design (the lookup
-   *     below already fails closed with NOT_FOUND), so publishing someone
-   *     else's private device is impossible.
+   *   - nobody else may touch visibility (LOBE-11760): owners demoting another
+   *     member's public device would appropriate it into that member's private
+   *     list, and other members' private devices are invisible to everyone
+   *     else by design (the lookup below already fails closed with NOT_FOUND),
+   *     so the whole toggle is effectively enroller-only.
    */
   setWorkspaceDeviceVisibility: wsWritableProcedure
     .use(serverDatabase)
@@ -1115,12 +1115,10 @@ export const deviceRouter = router({
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace device not found.' });
       }
       if (row.visibility === input.visibility) return { success: true };
-      const role = (ctx as { workspaceRole?: WorkspaceRole }).workspaceRole;
-      if (!canEditWorkspaceDevice(role, ctx.userId, row.userId)) {
+      if (row.userId !== ctx.userId) {
         throw new TRPCError({
           code: 'FORBIDDEN',
-          message:
-            'Only the enrolling member or a workspace owner can change this device visibility.',
+          message: 'Only the enrolling member can change this device visibility.',
         });
       }
       await model.setWorkspaceDeviceVisibility(input.deviceId, input.visibility);

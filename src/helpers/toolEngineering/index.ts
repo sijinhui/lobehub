@@ -1,6 +1,7 @@
 /**
  * Tools Engineering - Unified tools processing using ToolsEngine
  */
+import { BrowserManifest } from '@lobechat/builtin-tool-browser';
 import { SkillsIdentifier } from '@lobechat/builtin-tool-skills';
 import { CloudSandboxManifest } from '@lobechat/builtin-tool-cloud-sandbox';
 import { KnowledgeBaseManifest } from '@lobechat/builtin-tool-knowledge-base';
@@ -31,7 +32,7 @@ import {
 } from '@/store/tool/selectors';
 import { connectorSelectors } from '@/store/tool/slices/connector';
 import { useUserStore } from '@/store/user';
-import { settingsSelectors } from '@/store/user/selectors';
+import { labPreferSelectors, settingsSelectors } from '@/store/user/selectors';
 
 import { getSearchConfig } from '../getSearchConfig';
 import { isCanUseFC } from '../isCanUseFC';
@@ -246,6 +247,13 @@ export const createAgentToolsEngine = (
     // Always-on builtin tools
     ...Object.fromEntries(alwaysOnToolIds.map((id) => [id, true])),
     // System-level rules (may override user selection for specific tools)
+    // Browser rides the same local-runtime gate as local-system (the control
+    // IPC only exists in the desktop main process), plus the in-app browser
+    // Labs toggle that also governs the sidebar tab — with the lab off the
+    // tool would drive a pane the user can't see.
+    [BrowserManifest.identifier]:
+      agentChatConfigSelectors.isLocalSystemEnabled(agentState) &&
+      labPreferSelectors.enableInAppBrowser(useUserStore.getState()),
     [CloudSandboxManifest.identifier]: agentChatConfigSelectors.isCloudSandboxEnabled(agentState),
     [KnowledgeBaseManifest.identifier]: kbEnabled,
     [LocalSystemManifest.identifier]: agentChatConfigSelectors.isLocalSystemEnabled(agentState),

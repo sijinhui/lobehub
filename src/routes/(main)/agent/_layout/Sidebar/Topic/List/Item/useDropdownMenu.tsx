@@ -2,13 +2,13 @@ import { AGENT_CHAT_TOPIC_URL } from '@lobechat/const';
 import type { ChatTopicStatus } from '@lobechat/types';
 import { type MenuProps } from '@lobehub/ui';
 import { Icon } from '@lobehub/ui';
-import { confirmModal } from '@lobehub/ui/base-ui';
 import { App } from 'antd';
 import {
   Archive,
   ArchiveRestore,
   ExternalLink,
   FolderInput,
+  Forward,
   Hash,
   Link2,
   LucideCopy,
@@ -26,6 +26,8 @@ import { useActiveWorkspaceSlug } from '@/business/client/hooks/useActiveWorkspa
 import { openRenameModal } from '@/components/RenameModal';
 import { isDesktop } from '@/const/version';
 import { createMoveTopicsModal } from '@/features/AgentTopicManager/MoveTopicsModal';
+import { createTopicForwardModal } from '@/features/Conversation/MessageForward/TopicForwardModal';
+import { confirmRemoveTopic } from '@/features/DeleteTopicConfirm';
 import { openShareModal } from '@/features/ShareModal';
 import { useWorkspaceAwareNavigate } from '@/features/Workspace/useWorkspaceAwareNavigate';
 import { buildWorkspaceAwarePath } from '@/features/Workspace/workspaceAwarePath';
@@ -205,6 +207,16 @@ export const useTopicItemDropdownMenu = ({
         },
       },
       {
+        disabled: !canCreateTopic || !activeAgentId,
+        icon: <Icon icon={Forward} />,
+        key: 'forwardToAgent',
+        label: t('actions.forwardToAgent'),
+        onClick: () => {
+          if (!activeAgentId) return;
+          createTopicForwardModal({ sourceAgentId: activeAgentId, topicId: id, topicTitle: title });
+        },
+      },
+      {
         disabled: !canEditTopic,
         icon: <Icon icon={FolderInput} />,
         key: 'moveToAgent',
@@ -233,15 +245,11 @@ export const useTopicItemDropdownMenu = ({
         key: 'delete',
         label: t('delete', { ns: 'common' }),
         onClick: () => {
-          confirmModal({
-            cancelText: t('cancel', { ns: 'common' }),
-            content: t('actions.confirmRemoveTopic'),
-            okButtonProps: { danger: true },
-            okText: t('delete', { ns: 'common' }),
-            onOk: async () => {
-              await removeTopic(id);
+          void confirmRemoveTopic({
+            onConfirm: async (removeFiles) => {
+              await removeTopic(id, removeFiles);
             },
-            title: t('delete', { ns: 'common' }),
+            topicIds: [id],
           });
         },
       },

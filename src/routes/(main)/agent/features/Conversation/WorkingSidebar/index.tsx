@@ -4,6 +4,7 @@ import { PanelRightCloseIcon } from 'lucide-react';
 import { lazy, memo, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { useBusinessWorkingSidebarTabs } from '@/business/client/features/WorkingSidebarTabs';
 import { DESKTOP_HEADER_ICON_SMALL_SIZE } from '@/const/layoutTokens';
 import { isDesktop } from '@/const/version';
 import { useRepoType } from '@/features/ChatInput/ControlBar/useRepoType';
@@ -19,8 +20,10 @@ import {
   agentSelectors,
   chatConfigByIdSelectors,
 } from '@/store/agent/selectors';
+import { useChatStore } from '@/store/chat';
 import { useElectronStore } from '@/store/electron';
 import { useGlobalStore } from '@/store/global';
+import { systemStatusSelectors } from '@/store/global/selectors';
 import { useUserStore } from '@/store/user';
 import { labPreferSelectors } from '@/store/user/selectors';
 
@@ -81,23 +84,27 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
   `,
 }));
 
-type Tab = 'browser' | 'files' | 'params' | 'review' | 'resources';
-
 const REVIEW_TREE_STORAGE_KEY = 'lobechat-review-tree';
-const DEFAULT_PANEL_WIDTH = 360;
+const MAX_PANEL_WIDTH = 1200;
 // Two-pane Review (diff list + file-tree rail) is cramped below this.
 const TWO_PANE_MIN_WIDTH = 560;
 
 const AgentWorkingSidebar = memo(() => {
   const { t } = useTranslation(['chat', 'setting']);
-  const toggleRightPanel = useGlobalStore((s) => s.toggleRightPanel);
-  // Panel open/collapsed state (drives the `<RightPanel>` expand). Used to gate
-  // the resources pane's document fetch so a collapsed sidebar doesn't pull the
-  // full agent-document list into the conversation's initial batch.
-  const showRightPanel = useGlobalStore((s) => s.status.showRightPanel);
-  const setWorkingSidebarTab = useGlobalStore((s) => s.setWorkingSidebarTab);
-  const storedTab = useGlobalStore((s) => s.status.workingSidebarTab);
+  const [storedWidth, updateSystemStatus, toggleRightPanel, setWorkingSidebarTab, showRightPanel, storedTab] =
+    useGlobalStore((s) => [
+      systemStatusSelectors.workingSidebarWidth(s),
+      s.updateSystemStatus,
+      s.toggleRightPanel,
+      s.setWorkingSidebarTab,
+      // Panel open/collapsed state (drives the `<RightPanel>` expand). Used to gate
+      // the resources pane's document fetch so a collapsed sidebar doesn't pull the
+      // full agent-document list into the conversation's initial batch.
+      s.status.showRightPanel,
+      s.status.workingSidebarTab,
+    ]);
   const activeAgentId = useAgentStore((s) => s.activeAgentId);
+  const topicId = useChatStore((s) => s.activeTopicId);
   const isLocalSystemEnabled = useAgentStore((s) =>
     activeAgentId ? chatConfigByIdSelectors.isLocalSystemEnabledById(activeAgentId)(s) : false,
   );
@@ -150,18 +157,33 @@ const AgentWorkingSidebar = memo(() => {
   const enableInAppBrowser = useUserStore(labPreferSelectors.enableInAppBrowser);
   const browserAvailable = isDesktop && enableInAppBrowser;
   const browserSessionId = `agent:${activeAgentId ?? 'default'}`;
-  const resolveActiveTab = (): Tab => {
-    if (storedTab === 'params' && paramsAvailable) return 'params';
-    if (storedTab === 'review' && reviewAvailable) return 'review';
-    if (storedTab === 'files' && filesAvailable) return 'files';
-    if (storedTab === 'browser' && browserAvailable) return 'browser';
-    if (storedTab === 'resources') return 'resources';
+
+  const businessTabs = useBusinessWorkingSidebarTabs({ activeAgentId, topicId });
+
+  const availableTabs = new Set<string>([
+    'resources',
+    ...(reviewAvailable ? ['review'] : []),
+    ...(filesAvailable ? ['files'] : []),
+    ...(browserAvailable ? ['browser'] : []),
+    ...(paramsAvailable ? ['params'] : []),
+    ...businessTabs.map((tab) => tab.key),
+  ]);
+
+  const resolveActiveTab = (): string => {
+    if (storedTab && availableTabs.has(storedTab)) return storedTab;
+    // a persisted tab may reference a business tab that is absent in this build
+    if (storedTab) {
+      if (paramsAvailable) return 'params';
+      if (reviewAvailable) return 'review';
+      if (filesAvailable) return 'files';
+      return 'resources';
+    }
     if (isHetero) return 'resources';
     if (reviewAvailable) return 'review';
     if (filesAvailable) return 'files';
     return 'resources';
   };
-  const activeTab: Tab = resolveActiveTab();
+  const activeTab = resolveActiveTab();
 
   // Review's tree-nav rail lives here (not inside Review) so the panel can widen
   // when the two-pane layout is on. Hidden by default — the panel shows only the
@@ -171,7 +193,6 @@ const AgentWorkingSidebar = memo(() => {
     REVIEW_TREE_STORAGE_KEY,
     false,
   );
-  const [panelWidth, setPanelWidth] = useState<number | string>(DEFAULT_PANEL_WIDTH);
   // Mount the browser pane on first activation only (no eager page load), then
   // keep it mounted-but-hidden so the page survives tab switches.
   const [browserActivated, setBrowserActivated] = useState(false);
@@ -179,26 +200,22 @@ const AgentWorkingSidebar = memo(() => {
     if (activeTab === 'browser') setBrowserActivated(true);
   }, [activeTab]);
   const reviewTwoPane = activeTab === 'review' && reviewAvailable && showReviewTree;
-  useEffect(() => {
-    if (!reviewTwoPane) return;
-    setPanelWidth((w) =>
-      typeof w === 'number' && w < TWO_PANE_MIN_WIDTH ? TWO_PANE_MIN_WIDTH : w,
-    );
-  }, [reviewTwoPane]);
+  const displayWidth = reviewTwoPane ? Math.max(storedWidth, TWO_PANE_MIN_WIDTH) : storedWidth;
 
   return (
     <RightPanel
       stableLayout
-      defaultWidth={DEFAULT_PANEL_WIDTH}
-      maxWidth={720}
+      defaultWidth={displayWidth}
+      maxWidth={MAX_PANEL_WIDTH}
       minWidth={300}
-      width={panelWidth}
+      width={displayWidth}
       onSizeChange={(size) => {
         if (!size?.width) return;
         // DraggablePanel emits width as a `"420px"` string on drag-stop; parse it so
         // the controlled width actually updates (otherwise the panel snaps back).
         const w = typeof size.width === 'string' ? Number.parseInt(size.width) : size.width;
-        if (Number.isFinite(w)) setPanelWidth(w);
+        if (!Number.isFinite(w) || w === storedWidth) return;
+        updateSystemStatus({ workingSidebarWidth: w });
       }}
     >
       <Flexbox height={'100%'} width={'100%'}>
@@ -211,6 +228,16 @@ const AgentWorkingSidebar = memo(() => {
           paddingInline={4}
         >
           <div className={styles.tabs}>
+            {businessTabs.map((tab) => (
+              <button
+                className={`${styles.tab} ${activeTab === tab.key ? styles.tabActive : ''}`}
+                key={tab.key}
+                type="button"
+                onClick={() => setWorkingSidebarTab(tab.key)}
+              >
+                {tab.label}
+              </button>
+            ))}
             <button
               className={`${styles.tab} ${activeTab === 'resources' ? styles.tabActive : ''}`}
               type="button"
@@ -291,6 +318,14 @@ const AgentWorkingSidebar = memo(() => {
               <BrowserPane key={browserSessionId} sessionId={browserSessionId} />
             </Flexbox>
           )}
+          {businessTabs.map((tab) => (
+            <Flexbox
+              className={activeTab === tab.key ? styles.pane : styles.paneHidden}
+              key={tab.key}
+            >
+              {tab.pane}
+            </Flexbox>
+          ))}
           <Flexbox
             className={activeTab === 'resources' ? styles.pane : styles.paneHidden}
             gap={8}

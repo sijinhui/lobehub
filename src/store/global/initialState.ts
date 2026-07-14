@@ -4,6 +4,7 @@ import { type MigrationSQL, type MigrationTableItem } from '@/types/clientDB';
 import { DatabaseLoadingState } from '@/types/clientDB';
 import { type LocaleMode } from '@/types/locale';
 import { SessionDefaultGroup } from '@/types/session';
+import { type TopicGroupMode } from '@/types/topic';
 import { AsyncLocalStorage } from '@/utils/localStorage';
 
 export enum SidebarTabKey {
@@ -36,7 +37,9 @@ export enum GroupSettingsTabs {
   Settings = 'settings',
 }
 
-export type WorkingSidebarTab = 'browser' | 'files' | 'params' | 'resources' | 'review';
+// business builds may register extra sidebar tabs, so any string key is accepted
+export type WorkingSidebarTab =
+  'browser' | 'files' | 'params' | 'resources' | 'review' | (string & {});
 
 export const DEFAULT_RESOURCE_MANAGER_COLUMN_WIDTHS = {
   date: 160,
@@ -127,6 +130,14 @@ export interface SystemStatus {
    */
   agentPageSize?: number;
   chatInputHeight?: number;
+  /**
+   * Which topicGroups are collapsed, bucketed by group mode. We persist the
+   * collapsed keys rather than the expanded ones so a group that shows up later
+   * (a new project directory, a new month bucket) starts expanded; and bucketing
+   * per mode keeps `project:*` keys from leaking into byTime, where nothing would
+   * match and every group would render collapsed.
+   */
+  collapsedTopicGroupKeysByMode?: Partial<Record<TopicGroupMode, string[]>>;
   disabledModelProvidersSortType?: string;
   disabledModelsSortType?: string;
   /**
@@ -145,8 +156,6 @@ export interface SystemStatus {
   expandInputActionbar?: boolean;
   // which sessionGroup should expand
   expandSessionGroupKeys: string[];
-  // which topicGroup should expand
-  expandTopicGroupKeys?: string[];
   fileManagerViewMode?: 'list' | 'masonry';
   filePanelWidth: number;
   /**
@@ -326,6 +335,11 @@ export interface SystemStatus {
    */
   workingSidebarTab?: WorkingSidebarTab;
   /**
+   * Width of the agent chat right-side WorkingSidebar (space / params / files / …).
+   * Persisted so resizing survives remounts when navigating away and back.
+   */
+  workingSidebarWidth?: number;
+  /**
    * Workspace-mode overlay for sidebar layout/visibility preferences.
    * When the user is inside a workspace (see `useActiveWorkspaceId`), reads
    * fall back to these values instead of the top-level fields, and writes
@@ -459,6 +473,7 @@ export const INITIAL_STATUS = {
   videoPanelWidth: 320,
   videoTopicViewMode: 'grid' as const,
   videoTopicPanelWidth: 80,
+  workingSidebarWidth: 360,
 } satisfies SystemStatus;
 
 export const initialState: GlobalState = {
