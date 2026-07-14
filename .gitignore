@@ -116,6 +116,8 @@ vertex-ai-key.json
 .mcp.json
 CLAUDE.local.md
 .agent/
+.codex/hooks.json
+.agents/skills/source-command-dedupe/
 
 # MCP tools
 .serena/**
