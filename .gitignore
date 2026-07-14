@@ -157,4 +157,4 @@ docs/superpowers/
 # Kagura agent runtime
 .kagura/
 
-.cursor/
+.cursor
