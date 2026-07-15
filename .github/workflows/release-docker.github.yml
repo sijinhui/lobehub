@@ -20,6 +20,7 @@ concurrency:
 
 jobs:
   build:
+    if: github.server_url == 'https://github.com'
     strategy:
       matrix:
         include:
@@ -102,6 +103,7 @@ jobs:
   merge:
     name: Merge
     needs: build
+    if: github.server_url == 'https://github.com'
     runs-on: ubuntu-latest
     steps:
       - name: Prepare

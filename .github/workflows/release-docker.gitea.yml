@@ -13,6 +13,7 @@ concurrency:
 
 jobs:
   build:
+    if: github.server_url != 'https://git.xiaosi.cc'
     runs-on: ubuntu-latest
     name: Build and Push Image
     steps:
