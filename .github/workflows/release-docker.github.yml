@@ -16,7 +16,7 @@ concurrency:
   cancel-in-progress: false
 
 # env:
-#   REGISTRY_IMAGE: registry.cn-hangzhou.aliyuncs.com/sijinhui/lobe-chat-database
+#   REGISTRY_IMAGE: registry.cn-hangzhou.aliyuncs.com/sijinhui/lobehub
 
 jobs:
   build:
@@ -36,9 +36,7 @@ jobs:
           platform=${{ matrix.platform }}
           echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
 
-          # Convert repository name to lowercase for Docker image name
-          REPO_NAME_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-          echo "REGISTRY_IMAGE=ghcr.io/$REPO_NAME_LOWER" >> $GITHUB_ENV
+          echo "REGISTRY_IMAGE=registry.cn-hangzhou.aliyuncs.com/sijinhui/lobehub" >> $GITHUB_ENV
 
       - name: Checkout base
         uses: actions/checkout@v6
@@ -64,9 +62,9 @@ jobs:
       - name: Docker login
         uses: docker/login-action@v3
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: registry.cn-hangzhou.aliyuncs.com
+          username: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+          password: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
 
       - name: Get commit SHA
         if: github.ref == 'refs/heads/main'
@@ -108,9 +106,7 @@ jobs:
     steps:
       - name: Prepare
         run: |
-          # Convert repository name to lowercase for Docker image name
-          REPO_NAME_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-          echo "REGISTRY_IMAGE=ghcr.io/$REPO_NAME_LOWER" >> $GITHUB_ENV
+          echo "REGISTRY_IMAGE=registry.cn-hangzhou.aliyuncs.com/sijinhui/lobehub" >> $GITHUB_ENV
 
       - name: Checkout base
         uses: actions/checkout@v6
@@ -139,9 +135,9 @@ jobs:
       - name: Docker login
         uses: docker/login-action@v3
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: registry.cn-hangzhou.aliyuncs.com
+          username: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+          password: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
 
       - name: Create manifest list and push
         working-directory: /tmp/digests
