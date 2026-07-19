@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import type { HeterogeneousProviderConfig } from './agencyConfig';
 import {
   buildHeteroExecArgs,
   buildHeteroSpawnArgs,
@@ -67,6 +68,59 @@ describe('buildHeteroSpawnArgs', () => {
     expect(buildHeteroSpawnArgs({ args: ['--agent', 'main'], type: 'openclaw' })).toEqual([
       '--agent',
       'main',
+    ]);
+  });
+
+  it('passes AMP native args through direct spawns and encodes them for lh hetero exec', () => {
+    const provider: HeterogeneousProviderConfig = { args: ['--mode', 'high'], type: 'amp' };
+
+    expect(buildHeteroSpawnArgs(provider)).toEqual(['--mode', 'high']);
+    expect(buildHeteroExecArgs(provider)).toEqual(['--agent-arg=--mode', '--agent-arg=high']);
+  });
+
+  it('forwards OpenCode native args and an explicit provider/model selection', () => {
+    const provider: HeterogeneousProviderConfig = {
+      args: ['--variant', 'high'],
+      model: 'anthropic/claude-sonnet-4',
+      type: 'opencode',
+    };
+
+    expect(buildHeteroSpawnArgs(provider)).toEqual([
+      '--variant',
+      'high',
+      '--model',
+      'anthropic/claude-sonnet-4',
+    ]);
+    expect(buildHeteroExecArgs(provider)).toEqual([
+      '--agent-arg=--variant',
+      '--agent-arg=high',
+      '--model',
+      'anthropic/claude-sonnet-4',
+    ]);
+  });
+
+  it('does not duplicate an OpenCode model already present in native args', () => {
+    const provider: HeterogeneousProviderConfig = {
+      args: ['--model=google/gemini-2.5-pro'],
+      model: 'anthropic/claude-sonnet-4',
+      type: 'opencode',
+    };
+
+    expect(buildHeteroSpawnArgs(provider)).toEqual(['--model=google/gemini-2.5-pro']);
+    expect(buildHeteroExecArgs(provider)).toEqual(['--agent-arg=--model=google/gemini-2.5-pro']);
+  });
+
+  it('honors the OpenCode short model flag in native args', () => {
+    const provider: HeterogeneousProviderConfig = {
+      args: ['-m', 'google/gemini-2.5-pro'],
+      model: 'anthropic/claude-sonnet-4',
+      type: 'opencode',
+    };
+
+    expect(buildHeteroSpawnArgs(provider)).toEqual(['-m', 'google/gemini-2.5-pro']);
+    expect(buildHeteroExecArgs(provider)).toEqual([
+      '--agent-arg=-m',
+      '--agent-arg=google/gemini-2.5-pro',
     ]);
   });
 

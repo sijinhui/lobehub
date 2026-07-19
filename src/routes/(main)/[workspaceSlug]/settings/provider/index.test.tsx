@@ -5,6 +5,12 @@ import { describe, expect, it, vi } from 'vitest';
 
 import WorkspaceProviderSetting from './index';
 
+const isOwner = vi.hoisted(() => ({ value: true }));
+
+vi.mock('@/business/client/hooks/useIsWorkspaceOwner', () => ({
+  useIsWorkspaceOwner: () => isOwner.value,
+}));
+
 vi.mock('@/const/version', () => ({ isCustomBranding: false }));
 
 vi.mock('@/routes/(main)/settings/provider/_layout/Desktop', () => ({
@@ -31,10 +37,6 @@ vi.mock('@/routes/(main)/settings/provider/detail', async () => {
   return { default: ProviderDetail };
 });
 
-vi.mock('@/routes/(main)/settings/provider/(list)/Footer', () => ({
-  default: () => <div data-testid="provider-footer" />,
-}));
-
 const renderPage = (providerId: string) =>
   render(
     <MemoryRouter initialEntries={[`/?provider=${providerId}`]}>
@@ -44,20 +46,26 @@ const renderPage = (providerId: string) =>
 
 describe('WorkspaceProviderSetting', () => {
   it('provides settings context for the reused provider settings page', () => {
+    isOwner.value = true;
     renderPage('openai');
 
     expect(screen.getByTestId('provider-context')).toHaveTextContent('true:true');
   });
 
-  it('hides the provider footer for OAuth device flow providers', () => {
-    renderPage('supergrok');
+  // The provider roadmap footer was removed from the provider list page in
+  // #17217, so the page renders no footer for any provider anymore.
+  it('renders no provider footer', () => {
+    isOwner.value = true;
+    renderPage('openai');
 
     expect(screen.queryByTestId('provider-footer')).not.toBeInTheDocument();
   });
 
-  it('shows the provider footer for regular providers', () => {
+  it('renders forbidden screen for non-owners', () => {
+    isOwner.value = false;
     renderPage('openai');
 
-    expect(screen.getByTestId('provider-footer')).toBeInTheDocument();
+    expect(screen.queryByTestId('provider-context')).toBeNull();
+    expect(screen.getByText('403')).toBeInTheDocument();
   });
 });

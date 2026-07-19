@@ -19,6 +19,7 @@ import {
   count,
   desc,
   eq,
+  getTableColumns,
   gt,
   gte,
   inArray,
@@ -43,6 +44,19 @@ type OnboardingSessionMetadataPatch = Partial<NonNullable<ChatTopicMetadata['onb
 type TopicMetadataPatch = Omit<Partial<ChatTopicMetadata>, 'onboardingSession'> & {
   onboardingSession?: OnboardingSessionMetadataPatch;
 };
+
+/**
+ * How much of the last assistant reply `queryTopics` ships to a list view. Long
+ * enough that a run summary arrives whole, short enough that 200 rows of raw
+ * markdown never do — anything past it is marked with an ellipsis, and the full
+ * text is one click away in the topic itself.
+ */
+const LAST_MESSAGE_PREVIEW_LENGTH = 2000;
+
+export interface TopicListItem extends TopicItem {
+  /** The topic's last non-empty assistant reply, truncated with a trailing `…`. Only set when `queryTopics` is called with `withLastMessage`. */
+  lastAssistantMessage?: string | null;
+}
 
 export interface CreateTopicParams {
   agentId?: string | null;
@@ -206,6 +220,15 @@ export class TopicModel {
 
   private ownership = () =>
     buildWorkspaceWhere({ userId: this.userId, workspaceId: this.workspaceId }, topics);
+
+  /**
+   * In workspace mode `ownership()` matches every member's topics, so a bulk
+   * "clear all" would wipe teammates' conversations. Destructive sweeps must
+   * additionally pin `user_id` to the caller (personal mode is unchanged —
+   * ownership already scopes to the user there).
+   */
+  private mine = () => and(this.ownership(), eq(topics.userId, this.userId));
+
   private messageOwnership = () =>
     buildWorkspaceWhere({ userId: this.userId, workspaceId: this.workspaceId }, messages);
   // **************** Query *************** //
@@ -342,6 +365,10 @@ export class TopicModel {
                 // rename/favorite edit still shows its real edit time. See rankTopics for
                 // the same activity-time pattern. (LOBE-11543)
                 sortUpdatedAt: topicActivityAt,
+                // Workspace sidebars filter maintenance actions client-side by
+                // ownership (own vs workspace scope) — the filter needs the row
+                // owner even in the slim projection.
+                userId: topics.userId,
                 ...detailColumns,
               } as any)
               .from(topics)
@@ -412,6 +439,10 @@ export class TopicModel {
                 // rename/favorite edit still shows its real edit time. See rankTopics for
                 // the same activity-time pattern. (LOBE-11543)
                 sortUpdatedAt: topicActivityAt,
+                // Workspace sidebars filter maintenance actions client-side by
+                // ownership (own vs workspace scope) — the filter needs the row
+                // owner even in the slim projection.
+                userId: topics.userId,
                 ...detailColumns,
               } as any)
               .from(topics)
@@ -478,6 +509,10 @@ export class TopicModel {
               // rename/favorite edit still shows its real edit time. See rankTopics for
               // the same activity-time pattern. (LOBE-11543)
               sortUpdatedAt: topicActivityAt,
+              // Workspace sidebars filter maintenance actions client-side by
+              // ownership (own vs workspace scope) — the filter needs the row
+              // owner even in the slim projection.
+              userId: topics.userId,
               ...detailColumns,
             } as any)
             .from(topics)
@@ -497,7 +532,7 @@ export class TopicModel {
 
     // Remove internal fields before returning
 
-    const cleanItems = items.map(({ agentId, sessionId, ...rest }) => rest);
+    const cleanItems = items.map(({ agentId: _agentId, sessionId: _sessionId, ...rest }) => rest);
 
     logTiming(timing, 'db.topic.query:done', {
       itemCount: cleanItems.length,
@@ -512,6 +547,19 @@ export class TopicModel {
     return this.db.query.topics.findFirst({
       where: and(eq(topics.id, id), this.ownership()),
     });
+  };
+
+  /**
+   * Minimal creator projection for router-level workspace row checks on
+   * batch-by-ids operations (batch delete / move).
+   */
+  findOwnersByIds = async (ids: string[]): Promise<{ id: string; userId: string }[]> => {
+    if (ids.length === 0) return [];
+
+    return this.db
+      .select({ id: topics.id, userId: topics.userId })
+      .from(topics)
+      .where(and(inArray(topics.id, ids), this.ownership()));
   };
 
   /**
@@ -545,24 +593,80 @@ export class TopicModel {
    * Query the current user's topics, optionally filtered by status. Used by the
    * Fleet view to list actively-running topics across all agents without
    * pulling the full topic set to the client.
+   *
+   * `withLastMessage` additionally pulls each topic's last assistant reply, so a
+   * list can show what the agent actually said instead of just a title. The
+   * preview is truncated server-side — raw assistant output is unbounded
+   * markdown, and a list only ever renders the head of it.
    */
   queryTopics = async ({
     statuses,
     pageSize = 200,
-  }: { pageSize?: number; statuses?: string[] } = {}): Promise<TopicItem[]> => {
-    return this.db
-      .select()
-      .from(topics)
+    withLastMessage,
+  }: {
+    pageSize?: number;
+    statuses?: string[];
+    withLastMessage?: boolean;
+  } = {}): Promise<TopicListItem[]> => {
+    const where = and(
+      this.ownership(),
+      statuses && statuses.length > 0
+        ? inArray(topics.status, statuses as ChatTopicStatus[])
+        : undefined,
+    );
+
+    if (!withLastMessage) {
+      return this.db
+        .select()
+        .from(topics)
+        .where(where)
+        .orderBy(desc(topics.updatedAt))
+        .limit(pageSize);
+    }
+
+    // Built with the query builder rather than a raw `sql` template so the inner
+    // `eq(messages.topicId, topics.id)` renders both sides fully qualified —
+    // see the note on `firstUserMessageSubquery` in `query()`.
+    //
+    // Assistant turns that only carried tool calls persist an empty `content`;
+    // skipping them lands on the last thing the agent actually *said*.
+    // One char past the limit, so the caller can tell "exactly this long" from
+    // "cut short" and mark the cut instead of ending mid-sentence.
+    const lastAssistantMessageSubquery = this.db
+      .select({
+        value: sql<string>`left(${messages.content}, ${LAST_MESSAGE_PREVIEW_LENGTH + 1})`,
+      })
+      .from(messages)
       .where(
         and(
-          this.ownership(),
-          statuses && statuses.length > 0
-            ? inArray(topics.status, statuses as ChatTopicStatus[])
-            : undefined,
+          eq(messages.topicId, topics.id),
+          eq(messages.role, 'assistant'),
+          this.messageOwnership(),
+          ne(messages.content, ''),
         ),
       )
+      .orderBy(desc(messages.createdAt))
+      .limit(1);
+
+    const rows = await this.db
+      .select({
+        ...getTableColumns(topics),
+        lastAssistantMessage: sql<string | null>`(${lastAssistantMessageSubquery})`.as(
+          'last_assistant_message',
+        ),
+      })
+      .from(topics)
+      .where(where)
       .orderBy(desc(topics.updatedAt))
       .limit(pageSize);
+
+    return rows.map((row) => ({
+      ...row,
+      lastAssistantMessage:
+        row.lastAssistantMessage && row.lastAssistantMessage.length > LAST_MESSAGE_PREVIEW_LENGTH
+          ? `${row.lastAssistantMessage.slice(0, LAST_MESSAGE_PREVIEW_LENGTH)}…`
+          : row.lastAssistantMessage,
+    }));
   };
 
   queryByKeyword = async (
@@ -970,23 +1074,52 @@ export class TopicModel {
 
   /**
    * Deletes multiple topics based on the sessionId.
+   * `restrictToCreator` limits the sweep to the caller's own rows (workspace
+   * non-owner members must not clear teammates' topics).
    */
-  batchDeleteBySessionId = async (sessionId?: string | null) => {
-    return this.db.delete(topics).where(and(this.matchSession(sessionId), this.ownership()));
+  batchDeleteBySessionId = async (
+    sessionId?: string | null,
+    options?: { restrictToCreator?: boolean },
+  ) => {
+    return this.db
+      .delete(topics)
+      .where(
+        and(
+          this.matchSession(sessionId),
+          options?.restrictToCreator ? this.mine() : this.ownership(),
+        ),
+      );
   };
 
   /**
    * Deletes multiple topics based on the groupId.
+   * `restrictToCreator` limits the sweep to the caller's own rows in workspace mode.
    */
-  batchDeleteByGroupId = async (groupId?: string | null) => {
-    return this.db.delete(topics).where(and(this.matchGroup(groupId), this.ownership()));
+  batchDeleteByGroupId = async (
+    groupId?: string | null,
+    options?: { restrictToCreator?: boolean },
+  ) => {
+    return this.db
+      .delete(topics)
+      .where(
+        and(this.matchGroup(groupId), options?.restrictToCreator ? this.mine() : this.ownership()),
+      );
   };
 
   /**
    * Deletes all topics matching the given agentId (`topics.agentId`).
+   * `restrictToCreator` limits the sweep to the caller's own rows (workspace
+   * non-owner members must not clear teammates' topics).
    */
-  batchDeleteByAgentId = async (agentId: string) => {
-    return this.db.delete(topics).where(and(this.ownership(), eq(topics.agentId, agentId)));
+  batchDeleteByAgentId = async (agentId: string, options?: { restrictToCreator?: boolean }) => {
+    return this.db
+      .delete(topics)
+      .where(
+        and(
+          options?.restrictToCreator ? this.mine() : this.ownership(),
+          eq(topics.agentId, agentId),
+        ),
+      );
   };
 
   /**
@@ -997,7 +1130,7 @@ export class TopicModel {
   };
 
   deleteAll = async () => {
-    return this.db.delete(topics).where(and(this.ownership()));
+    return this.db.delete(topics).where(this.mine());
   };
 
   // **************** Update *************** //
@@ -1422,6 +1555,55 @@ export class TopicModel {
       await tx
         .update(topics)
         .set({ metadata: nextMetadata, status: nextStatus })
+        .where(eq(topics.id, id));
+    });
+  }
+
+  /**
+   * Re-point a still-pending scheduled run at a new failed-attempt message. A
+   * dispatch that fails inside execAgent leaves its own error bubble on the
+   * placeholder it created; tracking that bubble as the run's
+   * `failedAssistantMessageId` lets the next tick's pre-dispatch cleanup clear
+   * it the same way it clears the original card, so retries don't strand one
+   * stale error bubble per failed attempt.
+   *
+   * `expectedClaimId` fences stale writers the same way it does in
+   * {@link TopicModel.clearScheduledRun}: a dispatch attempt that outlived its
+   * claim lease — or one whose schedule the user cancelled and re-armed — must
+   * not overwrite the pointer of a NEWER scheduled run, or the next cleanup
+   * would delete / anchor against an unrelated message. No-ops when the
+   * schedule was cleared or the claim no longer matches.
+   */
+  static async repointScheduledRunFailedMessage(
+    db: LobeChatDatabase,
+    id: string,
+    failedAssistantMessageId: string,
+    expectedClaimId: string,
+  ): Promise<void> {
+    await db.transaction(async (tx) => {
+      const [row] = await tx
+        .select({ metadata: topics.metadata, status: topics.status })
+        .from(topics)
+        .where(eq(topics.id, id))
+        .for('update');
+      if (!row || row.status !== 'scheduled') return;
+
+      const scheduledRun = row.metadata?.scheduledRun;
+      if (!scheduledRun) return;
+      if (scheduledRun.claim?.id !== expectedClaimId) return;
+
+      await tx
+        .update(topics)
+        .set({
+          metadata: {
+            ...row.metadata,
+            scheduledRun: {
+              ...scheduledRun,
+              failedAssistantMessageId,
+              updatedAt: new Date().toISOString(),
+            },
+          } as ChatTopicMetadata,
+        })
         .where(eq(topics.id, id));
     });
   }
