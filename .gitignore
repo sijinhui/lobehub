@@ -158,3 +158,6 @@ docs/superpowers/
 .kagura/
 
 .cursor
+
+# Amp agent runtime
+.amp/
