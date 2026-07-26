@@ -558,6 +558,7 @@ export interface AiProviderModelListItem {
   abilities?: ModelAbilities;
   config?: AiModelConfig;
   contextWindowTokens?: number;
+  description?: string;
   displayName?: string;
   enabled: boolean;
   family?: string;

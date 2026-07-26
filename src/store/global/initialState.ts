@@ -39,7 +39,16 @@ export enum GroupSettingsTabs {
 
 // business builds may register extra sidebar tabs, so any string key is accepted
 export type WorkingSidebarTab =
-  'browser' | 'files' | 'params' | 'resources' | 'review' | (string & {});
+  | 'browser'
+  | 'comments'
+  | 'documents'
+  | 'files'
+  | 'overview'
+  | 'params'
+  | 'review'
+  | 'skills'
+  | 'web'
+  | (string & {});
 
 export const DEFAULT_RESOURCE_MANAGER_COLUMN_WIDTHS = {
   date: 160,
@@ -135,6 +144,19 @@ export interface SystemStatus {
    * Agent Builder panel width
    */
   agentBuilderPanelWidth?: number;
+  /**
+   * View mode of the agent view-all page (card grid vs table list)
+   */
+  agentListViewMode?: 'card' | 'list';
+  /**
+   * Display options of the agent view-all page (grouping / ordering / hidden-agent visibility)
+   */
+  agentListViewOptions?: {
+    groupBy: 'author' | 'none';
+    orderBy: 'author' | 'title' | 'updatedAt';
+    orderDirection: 'asc' | 'desc';
+    showSidebarHidden: boolean;
+  };
   /**
    * number of agents (defaultList) to display
    */
@@ -354,6 +376,12 @@ export interface SystemStatus {
    */
   workingSidebarTab?: WorkingSidebarTab;
   /**
+   * One-shot request to reveal a WorkingSidebar tab. The nonce makes repeated
+   * requests for the already-selected tab observable, so a closed on-demand tab
+   * can be reopened by Git/File/Browser entry points.
+   */
+  workingSidebarTabRequest?: { nonce: number; tab: WorkingSidebarTab };
+  /**
    * Width of the agent chat right-side WorkingSidebar (space / params / files / …).
    * Persisted so resizing survives remounts when navigating away and back.
    */
@@ -429,6 +457,13 @@ export interface GlobalState {
 
 export const INITIAL_STATUS = {
   agentBuilderPanelWidth: 360,
+  agentListViewMode: 'list' as const,
+  agentListViewOptions: {
+    groupBy: 'none' as const,
+    orderBy: 'updatedAt' as const,
+    orderDirection: 'desc' as const,
+    showSidebarHidden: true,
+  },
   agentPageSize: 5,
   privateAgentPageSize: 5,
   chatInputHeight: 64,

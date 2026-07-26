@@ -1,4 +1,5 @@
 import { passkeyClient } from '@better-auth/passkey/client';
+import { CLIENT_VERSION_HEADER, CURRENT_VERSION } from '@lobechat/const';
 import {
   adminClient,
   genericOAuthClient,
@@ -26,6 +27,11 @@ export const {
   useListPasskeys,
   useSession,
 } = createAuthClient({
+  fetchOptions: {
+    headers: {
+      [CLIENT_VERSION_HEADER]: CURRENT_VERSION,
+    },
+  },
   plugins: [
     adminClient(),
     inferAdditionalFields<typeof auth>(),
