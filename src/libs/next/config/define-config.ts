@@ -130,6 +130,19 @@ export function defineConfig(config: CustomNextConfig) {
               key: 'CDN-Cache-Control',
               value: 'public, max-age=31536000, immutable',
             },
+          ],
+          source: '/_spa/:directory(assets|i18n|vendor)/:path*',
+        },
+        {
+          headers: [
+            {
+              key: 'Cache-Control',
+              value: 'public, max-age=31536000, immutable',
+            },
+            {
+              key: 'CDN-Cache-Control',
+              value: 'public, max-age=31536000, immutable',
+            },
             {
               key: 'Vercel-CDN-Cache-Control',
               value: 'public, max-age=31536000, immutable',
