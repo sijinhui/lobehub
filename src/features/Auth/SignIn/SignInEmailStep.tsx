@@ -51,6 +51,7 @@ export interface SignInEmailStepProps {
   onSocialSignIn: (provider: string) => void;
   passkeyLoading: boolean;
   serverConfigInit: boolean;
+  sessionExpired?: boolean;
   socialLoading: string | null;
 }
 
@@ -63,6 +64,7 @@ export const SignInEmailStep = ({
   oAuthSSOProviders,
   passkeyLoading,
   serverConfigInit,
+  sessionExpired,
   socialLoading,
   onCheckUser,
   onGoToSignup,
@@ -100,6 +102,15 @@ export const SignInEmailStep = ({
 
   return (
     <AuthCard title={t('signin.subtitle', { appName: BRANDING_NAME })}>
+      {sessionExpired && (
+        <Alert
+          showIcon
+          message={t('betterAuth.signin.sessionExpired')}
+          style={{ marginBlockEnd: 12 }}
+          type="warning"
+          variant="filled"
+        />
+      )}
       <Flexbox gap={12}>
         <Button
           block

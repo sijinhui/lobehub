@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import { type ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -36,6 +36,8 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('@lobehub/ui', () => ({
+  Alert: ({ title }: { title: ReactNode }) => <div role={'note'}>{title}</div>,
+  Flexbox: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   Form: ({
     items,
   }: {
@@ -59,6 +61,10 @@ vi.mock('@lobehub/ui', () => ({
     </div>
   ),
   Skeleton: () => <div>loading</div>,
+  Tag: ({ children }: { children: ReactNode }) => <span>{children}</span>,
+  Tooltip: ({ children, title }: { children: ReactNode; title: string }) => (
+    <span title={title}>{children}</span>
+  ),
 }));
 
 vi.mock('@lobehub/ui/base-ui', () => ({
@@ -99,10 +105,20 @@ afterEach(() => {
 });
 
 describe('Labs settings page', () => {
-  it('explains that Labs features are experimental', () => {
+  it('explains that Labs features are experimental in a banner, not the header subtitle', () => {
     renderPage();
 
-    expect(screen.getByText('description')).toBeDefined();
+    // The page title comes from the settings shell header (like Plans / Storage),
+    // so the experimental notice has to carry itself as a standalone banner.
+    expect(screen.getByRole('note').textContent).toBe('description');
+  });
+
+  it('hides its own setting header when the shell renders a compact one', () => {
+    useUserStore.setState({ isUserStateInit: true, updateLab: vi.fn() });
+    render(<Page showSettingHeader={false} />, { wrapper: createWrapper() });
+
+    expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
+    expect(screen.getByRole('note').textContent).toBe('description');
   });
 
   it('splits experiments into General and Desktop groups', () => {
@@ -135,5 +151,34 @@ describe('Labs settings page', () => {
     renderPage();
 
     expect(screen.queryByText('features.taskVerify.title')).toBeNull();
+  });
+
+  it('labels every experiment with a maturity stage tag', () => {
+    renderPage();
+
+    const alphaTags = screen.getAllByText('stage.alpha.label');
+    const betaTags = screen.getAllByText('stage.beta.label');
+    // Every toggle carries exactly one stage tag (6 general + 5 desktop).
+    expect(alphaTags.length + betaTags.length).toBe(11);
+  });
+
+  it('marks internal-testing experiments as alpha and usable ones as beta', () => {
+    renderPage();
+
+    const claudeCodeSdk = screen.getByText('features.claudeCodeSdk.title');
+    expect(within(claudeCodeSdk).getByText('stage.alpha.label')).toBeDefined();
+
+    const inputMarkdown = screen.getByText('features.inputMarkdown.title');
+    expect(within(inputMarkdown).getByText('stage.beta.label')).toBeDefined();
+  });
+
+  it('explains what each stage means via the tag tooltip', () => {
+    renderPage();
+
+    const alphaTag = screen.getAllByText('stage.alpha.label')[0];
+    expect(alphaTag.closest('[title="stage.alpha.desc"]')).not.toBeNull();
+
+    const betaTag = screen.getAllByText('stage.beta.label')[0];
+    expect(betaTag.closest('[title="stage.beta.desc"]')).not.toBeNull();
   });
 });
