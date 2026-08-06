@@ -1,13 +1,12 @@
 'use client';
 
 import { ActionIcon, Alert, Flexbox, Icon, Text } from '@lobehub/ui';
-import { Button, confirmModal } from '@lobehub/ui/base-ui';
+import { Button, confirmModal, toast } from '@lobehub/ui/base-ui';
 import { createStaticStyles } from 'antd-style';
 import { KeyRound, RefreshCw, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { message } from '@/components/AntdStaticMethods';
 import { passkey, useListPasskeys } from '@/libs/better-auth/auth-client';
 
 import ProfileRow from './ProfileRow';
@@ -38,15 +37,15 @@ const PasskeyRow = () => {
       const result = await passkey.addPasskey({ name: t('profile.passkey.defaultName') });
       if (result.error) {
         if (!('code' in result.error) || result.error.code !== 'ERROR_CEREMONY_ABORTED') {
-          message.error(result.error.message || t('profile.passkey.addError'));
+          toast.error(result.error.message || t('profile.passkey.addError'));
         }
         return;
       }
-      message.success(t('profile.passkey.added'));
+      toast.success(t('profile.passkey.added'));
       refetch();
     } catch (error) {
       console.error('Add passkey error:', error);
-      message.error(t('profile.passkey.addError'));
+      toast.error(t('profile.passkey.addError'));
     } finally {
       setAdding(false);
     }
@@ -64,14 +63,14 @@ const PasskeyRow = () => {
         try {
           const result = await passkey.deletePasskey({ id });
           if (result.error) {
-            message.error(result.error.message || t('profile.passkey.deleteError'));
+            toast.error(result.error.message || t('profile.passkey.deleteError'));
             return;
           }
-          message.success(t('profile.passkey.deleted'));
+          toast.success(t('profile.passkey.deleted'));
           refetch();
         } catch (error) {
           console.error('Delete passkey error:', error);
-          message.error(t('profile.passkey.deleteError'));
+          toast.error(t('profile.passkey.deleteError'));
         } finally {
           setDeletingId(undefined);
         }
