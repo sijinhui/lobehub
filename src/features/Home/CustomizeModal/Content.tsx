@@ -8,15 +8,16 @@ import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import CountStepper from './components/CountStepper';
+import PresetBar from './components/PresetBar';
 import SettingRow from './components/SettingRow';
-import { HOME_COUNT_MAX, HOME_COUNT_MIN, HOME_WIDGET_KEYS } from './config';
+import { HOME_COUNT_MAX, HOME_COUNT_MIN, HOME_WIDGET_GROUPS } from './config';
 import { useHomeCustomization } from './useHomeCustomization';
 
 const styles = createStaticStyles(({ css, cssVar }) => ({
   body: css`
     overflow-y: auto;
     max-block-size: min(70vh, 560px);
-    padding-block: 4px 20px;
+    padding-block: 12px 20px;
     padding-inline: 20px;
   `,
   footer: css`
@@ -34,7 +35,9 @@ const CustomizeModalContent = memo(() => {
   const { t } = useTranslation('home');
   const { close } = useModalContext();
   const {
+    applyPreset,
     isWidgetHidden,
+    preset,
     recentsCount,
     reset,
     setRecentsCount,
@@ -66,43 +69,55 @@ const CustomizeModalContent = memo(() => {
       </Flexbox>
 
       <Flexbox className={styles.body} gap={20}>
-        <Flexbox gap={12}>
-          <Text fontSize={12} type={'secondary'} weight={600}>
-            {t('dashboard.customize.group.decoration')}
-          </Text>
-          <SettingRow
-            description={t('dashboard.customize.portrait.desc')}
-            title={t('dashboard.customize.portrait.title')}
-          >
-            <Switch
-              aria-label={t('dashboard.customize.portrait.title')}
-              checked={showPortrait}
-              onChange={togglePortrait}
-            />
-          </SettingRow>
-        </Flexbox>
+        <SettingRow title={t('dashboard.customize.preset.label')}>
+          <PresetBar value={preset} onChange={applyPreset} />
+        </SettingRow>
 
-        <Flexbox gap={12}>
-          <Text fontSize={12} type={'secondary'} weight={600}>
-            {t('dashboard.customize.group.sections')}
-          </Text>
-          {HOME_WIDGET_KEYS.map((key) => (
-            <SettingRow key={key} title={t(`dashboard.customize.widget.${key}`)}>
-              <Switch
-                aria-label={t(`dashboard.customize.widget.${key}`)}
-                checked={!isWidgetHidden(key)}
-                onChange={() => toggleWidget(key)}
-              />
-            </SettingRow>
-          ))}
-        </Flexbox>
+        {/* No heading: the groups below name parts of the page, and a heading
+            over this single row would promise a category that has one member
+            and no page to point at. Its own label and description say enough. */}
+        <SettingRow
+          description={t('dashboard.customize.portrait.desc')}
+          title={t('dashboard.customize.portrait.title')}
+        >
+          <Switch
+            aria-label={t('dashboard.customize.portrait.title')}
+            checked={showPortrait}
+            size={'small'}
+            onChange={togglePortrait}
+          />
+        </SettingRow>
+
+        {HOME_WIDGET_GROUPS.map((group) => (
+          <Flexbox gap={12} key={group.key}>
+            <Text fontSize={12} type={'secondary'} weight={600}>
+              {t(`dashboard.customize.group.${group.key}`)}
+            </Text>
+            {group.widgets.map((key) => (
+              <SettingRow key={key} title={t(`dashboard.customize.widget.${key}`)}>
+                <Switch
+                  aria-label={t(`dashboard.customize.widget.${key}`)}
+                  checked={!isWidgetHidden(key)}
+                  // The scheduled block is the second half of the task overview,
+                  // so there is nothing for it to switch on while the first half
+                  // is off.
+                  disabled={key === 'scheduledTasks' && isWidgetHidden('tasks')}
+                  size={'small'}
+                  onChange={() => toggleWidget(key)}
+                />
+              </SettingRow>
+            ))}
+          </Flexbox>
+        ))}
 
         <Flexbox gap={12}>
           <Text fontSize={12} type={'secondary'} weight={600}>
             {t('dashboard.customize.group.listSize')}
           </Text>
+          {/* A section that isn't on the page has no length to tune. */}
           <SettingRow title={t('dashboard.customize.recents.count.title')}>
             <CountStepper
+              disabled={isWidgetHidden('recents')}
               label={t('dashboard.customize.recents.count.title')}
               max={HOME_COUNT_MAX}
               min={HOME_COUNT_MIN}
@@ -112,6 +127,7 @@ const CustomizeModalContent = memo(() => {
           </SettingRow>
           <SettingRow title={t('dashboard.customize.tasks.count.title')}>
             <CountStepper
+              disabled={isWidgetHidden('tasks')}
               label={t('dashboard.customize.tasks.count.title')}
               max={HOME_COUNT_MAX}
               min={HOME_COUNT_MIN}

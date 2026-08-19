@@ -13,12 +13,18 @@ export default {
   'features.assistantMessageGroup.desc':
     'Group agent messages and their tool call results together for display',
   'features.assistantMessageGroup.title': 'Agent Message Grouping',
+  'features.claudeCodeApiMode.desc':
+    'Let Claude Code use a configured API provider and model on this desktop instead of a Claude subscription. Desktop local execution only.',
+  'features.claudeCodeApiMode.title': 'Claude Code API Provider',
   'features.claudeCodeSdk.desc':
     'Run Claude Code sessions through the Claude Agent SDK instead of spawning the CLI. Enables richer streaming and session control.',
   'features.claudeCodeSdk.title': 'Claude Code SDK Runtime',
   'features.codexAppServer.desc':
     'Run Codex sessions through the local app-server instead of one-shot CLI processes. Enables token streaming and native turn control.',
   'features.codexAppServer.title': 'Codex App Server Runtime',
+  'features.desktopSplitView.desc':
+    'Show two desktop tabs side by side, with independent navigation and a resizable divider.',
+  'features.desktopSplitView.title': 'Split Tab View',
   'features.heteroSessionImport.desc':
     'Add an "Import Local Agent Sessions" entry to the topic list menu: scan local Claude Code / Codex CLI transcripts and import them as topics, with incremental sync on re-import.',
   'features.heteroSessionImport.title': 'Local Agent Session Import',
@@ -39,9 +45,15 @@ export default {
   'features.oauthApps.desc':
     'Show OAuth app management in personal and workspace settings. This feature is hidden by default.',
   'features.oauthApps.title': 'OAuth Apps',
+  'features.projects.desc':
+    'Organize long-running goals into dedicated workspaces with their own agents, knowledge bases, and tasks.',
+  'features.projects.title': 'Project Workspaces',
   'features.taskVerify.desc':
     'Add a delivery-acceptance section to the task detail: describe acceptance in one sentence and let AI generate editable verify criteria.',
   'features.taskVerify.title': 'Task Delivery Acceptance',
+  'features.selfLearning.desc':
+    'Show what each agent has learned from real practice — its rule base, which rules actually get used, and which layers are still blank.',
+  'features.selfLearning.title': 'Self-evolving',
   'features.topicAcceptance.desc':
     'Author a delivery checklist for the current topic right above the composer, so the conversation is held to standards you can edit any time.',
   'features.topicAcceptance.title': 'Topic Acceptance',

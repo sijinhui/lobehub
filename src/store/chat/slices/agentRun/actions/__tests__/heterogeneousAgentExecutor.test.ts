@@ -17,10 +17,11 @@ import type * as LobeChatConst from '@lobechat/const';
 import { HeterogeneousAgentSessionErrorCode } from '@lobechat/electron-client-ipc';
 import type { AgentEventAdapter } from '@lobechat/heterogeneous-agents';
 import { createAdapter } from '@lobechat/heterogeneous-agents';
-import type { ChatTopicMetadata } from '@lobechat/types';
+import type { ChatTopicMetadata, HeterogeneousProviderConfig } from '@lobechat/types';
 import { ThreadStatus } from '@lobechat/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { useAiInfraStore } from '@/store/aiInfra';
 import { useChatStore } from '@/store/chat/store';
 import { useUserStore } from '@/store/user';
 
@@ -38,6 +39,11 @@ const mockUpdateMessage = vi.fn();
 const mockUpdateMessageError = vi.fn();
 const mockUpdateToolMessage = vi.fn();
 const mockGetMessages = vi.fn();
+
+const mockToastInfo = vi.fn();
+vi.mock('@lobehub/ui/base-ui', () => ({
+  toast: { info: (...args: unknown[]) => mockToastInfo(...args) },
+}));
 
 vi.mock('@/services/message', () => ({
   messageService: {
@@ -593,6 +599,11 @@ describe('heterogeneousAgentExecutor DB persistence', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    useAiInfraStore.setState({
+      aiProviderRuntimeConfig: {},
+      enabledAiModels: [],
+      enabledAiProviders: [],
+    });
     delete (globalThis as any).window;
   });
 
@@ -643,6 +654,157 @@ describe('heterogeneousAgentExecutor DB persistence', () => {
 
     return { get, store };
   }
+
+  describe('Claude Code Desktop-local API binding', () => {
+    let previousLab: ReturnType<typeof useUserStore.getState>['preference']['lab'];
+
+    const setClaudeCodeApiModeLab = (enabled: boolean) => {
+      useUserStore.setState((state) => ({
+        preference: {
+          ...state.preference,
+          lab: { ...state.preference.lab, enableClaudeCodeApiMode: enabled },
+        },
+      }));
+    };
+
+    beforeEach(() => {
+      previousLab = useUserStore.getState().preference.lab;
+      setClaudeCodeApiModeLab(true);
+    });
+
+    afterEach(() => {
+      useUserStore.setState((state) => ({
+        preference: { ...state.preference, lab: previousLab },
+      }));
+    });
+
+    const apiProvider = {
+      apiConfig: { model: 'api-primary', providerId: 'anthropic-direct' },
+      args: ['--model', 'stale-arg-model', '--effort', 'high'],
+      authMode: 'api' as const,
+      command: 'claude',
+      env: {
+        ANTHROPIC_AUTH_TOKEN: 'stale-token',
+        CLAUDE_CODE_USE_BEDROCK: '1',
+        KEEP_ME: 'yes',
+      },
+      model: 'stale-config-model',
+      type: 'claude-code' as const,
+    };
+
+    const configureDirectProvider = () => {
+      useAiInfraStore.setState({
+        aiProviderRuntimeConfig: {
+          'anthropic-direct': {
+            keyVaults: { apiKey: 'direct-key', baseURL: 'https://direct.example.com' },
+            settings: { sdkType: 'anthropic' },
+          } as any,
+        },
+        enabledAiModels: [
+          {
+            enabled: true,
+            id: 'api-primary',
+            providerId: 'anthropic-direct',
+            type: 'chat',
+          } as any,
+        ],
+        enabledAiProviders: [{ id: 'anthropic-direct' } as any],
+      });
+    };
+
+    it('launches with only the bound model and direct credentials', async () => {
+      configureDirectProvider();
+
+      await runWithEvents([ccResult()], {
+        params: { heterogeneousProvider: apiProvider },
+      });
+
+      expect(mockStartSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          args: ['--effort', 'high', '--model', 'api-primary'],
+          env: expect.objectContaining({
+            ANTHROPIC_AUTH_TOKEN: 'direct-key',
+            ANTHROPIC_BASE_URL: 'https://direct.example.com',
+            ANTHROPIC_MODEL: 'api-primary',
+            ANTHROPIC_SMALL_FAST_MODEL: 'api-primary',
+            CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: '1',
+            CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1',
+            CLAUDE_CODE_USE_BEDROCK: '0',
+            CLAUDE_CODE_USE_MANTLE: '0',
+            CLAUDE_CODE_USE_VERTEX: '0',
+            KEEP_ME: 'yes',
+          }),
+        }),
+      );
+      const { env } = mockStartSession.mock.calls[0][0];
+      expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+      expect(mockSelectAccountForAgent).not.toHaveBeenCalled();
+      expect(mockGetClaudeCodeIdentity).not.toHaveBeenCalled();
+    });
+
+    it('fails before spawn when the Labs experiment is disabled', async () => {
+      configureDirectProvider();
+      setClaudeCodeApiModeLab(false);
+      const store = createMockStore();
+
+      await executeHeterogeneousAgent(
+        vi.fn(() => store),
+        {
+          ...defaultParams,
+          heterogeneousProvider: apiProvider,
+        },
+      );
+
+      expect(mockStartSession).not.toHaveBeenCalled();
+      expect(mockUpdateMessageError).toHaveBeenCalledWith(
+        'ast-initial',
+        expect.objectContaining({ message: expect.stringMatching(/labDisabled|Labs experiment/) }),
+        expect.anything(),
+      );
+    });
+
+    it('fails before spawn when the bound provider is disabled or deleted', async () => {
+      const store = createMockStore();
+
+      await executeHeterogeneousAgent(
+        vi.fn(() => store),
+        {
+          ...defaultParams,
+          heterogeneousProvider: apiProvider,
+        },
+      );
+
+      expect(mockStartSession).not.toHaveBeenCalled();
+      expect(mockUpdateMessageError).toHaveBeenCalledWith(
+        'ast-initial',
+        expect.objectContaining({ message: expect.stringContaining('anthropic-direct') }),
+        expect.anything(),
+      );
+    });
+
+    it('fails before spawn when an explicitly bound fast model is unavailable', async () => {
+      configureDirectProvider();
+      const store = createMockStore();
+
+      await executeHeterogeneousAgent(
+        vi.fn(() => store),
+        {
+          ...defaultParams,
+          heterogeneousProvider: {
+            ...apiProvider,
+            apiConfig: { ...apiProvider.apiConfig, smallFastModel: 'disabled-fast-model' },
+          },
+        },
+      );
+
+      expect(mockStartSession).not.toHaveBeenCalled();
+      expect(mockUpdateMessageError).toHaveBeenCalledWith(
+        'ast-initial',
+        expect.objectContaining({ message: expect.stringContaining('disabled-fast-model') }),
+        expect.anything(),
+      );
+    });
+  });
 
   it('surfaces stream_retry metadata on the running operation and clears it on the next event', async () => {
     const store = createMockStore();
@@ -1024,6 +1186,67 @@ describe('heterogeneousAgentExecutor DB persistence', () => {
       // provider is emitted by the CC adapter on turn_metadata so it rides
       // along with the final content/model write.
       expect(finalWrite![1].provider).toBe('claude-code');
+    });
+
+    it('persists the Grok prompt-result model with per-turn rather than aggregate usage', async () => {
+      await runWithEvents(
+        [
+          {
+            jsonrpc: '2.0',
+            method: 'session/update',
+            params: {
+              sessionId: 'grok-session',
+              update: {
+                content: { text: 'Grok answer', type: 'text' },
+                sessionUpdate: 'agent_message_chunk',
+              },
+            },
+          },
+          {
+            jsonrpc: '2.0',
+            method: 'x.ai/session_notification',
+            params: {
+              _meta: { eventId: 'grok-response-completed' },
+              sessionId: 'grok-session',
+              update: {
+                sessionUpdate: 'response_completed',
+                stop_reason: 'end_turn',
+                usage: { input_tokens: 10, output_tokens: 5 },
+              },
+            },
+          },
+          {
+            id: 5,
+            jsonrpc: '2.0',
+            result: {
+              _meta: {
+                modelId: 'grok-build',
+                usage: { inputTokens: 12, outputTokens: 4 },
+              },
+              stopReason: 'end_turn',
+            },
+          },
+        ],
+        {
+          params: {
+            heterogeneousProvider: { command: 'grok', type: 'grok-build' },
+          },
+        },
+      );
+
+      const modelWrite = mockUpdateMessage.mock.calls.find(
+        ([id, value]: any) => id === 'ast-initial' && value.model === 'grok-build' && value.usage,
+      );
+      expect(modelWrite).toBeDefined();
+      expect(modelWrite![1]).toMatchObject({
+        model: 'grok-build',
+        provider: 'grok-build',
+        usage: {
+          totalInputTokens: 10,
+          totalOutputTokens: 5,
+          totalTokens: 15,
+        },
+      });
     });
 
     // The run's first assistant already exists in `dbMessagesMap` before the
@@ -1680,7 +1903,7 @@ describe('heterogeneousAgentExecutor DB persistence', () => {
       });
     });
 
-    it('should inject local workspace context only when starting a native session', async () => {
+    it('should not inject local workspace context into native sessions', async () => {
       const store = createMockStore();
       const get = vi.fn(() => store);
       const params = {
@@ -1695,9 +1918,7 @@ describe('heterogeneousAgentExecutor DB persistence', () => {
 
       await executeHeterogeneousAgent(get, params);
 
-      expect(mockSendPrompt.mock.calls[0][0].systemContext).toContain(
-        "You are running on the user's own machine. Your working directory is `/Users/me/repo`.",
-      );
+      expect(mockSendPrompt.mock.calls[0][0].systemContext).toBe('Follow the agent rules.');
 
       await executeHeterogeneousAgent(get, {
         ...params,
@@ -1792,6 +2013,49 @@ describe('heterogeneousAgentExecutor DB persistence', () => {
             '-c',
             'model_reasoning_effort="xhigh"',
           ],
+        }),
+      );
+    });
+
+    it('should pass the selected TRAE model through ACP instead of native args', async () => {
+      const store = createMockStore();
+      const get = vi.fn(() => store);
+
+      await executeHeterogeneousAgent(get, {
+        ...defaultParams,
+        heterogeneousProvider: {
+          args: ['--feature=test'],
+          command: 'traecli',
+          model: 'gpt-5.4',
+          type: 'trae' as const,
+        },
+      });
+
+      expect(mockStartSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentType: 'trae',
+          args: ['--feature=test'],
+          initialModel: 'gpt-5.4',
+        }),
+      );
+    });
+
+    it('should execute a persisted legacy provider config without type', async () => {
+      const store = createMockStore();
+      const get = vi.fn(() => store);
+      const legacyProvider = {
+        command: '/usr/local/bin/custom-codex',
+      } as unknown as HeterogeneousProviderConfig;
+
+      await executeHeterogeneousAgent(get, {
+        ...defaultParams,
+        heterogeneousProvider: legacyProvider,
+      });
+
+      expect(mockStartSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentType: 'codex',
+          command: '/usr/local/bin/custom-codex',
         }),
       );
     });
@@ -1922,6 +2186,169 @@ describe('heterogeneousAgentExecutor DB persistence', () => {
         heteroSessionId: 'thread_new_456',
         heteroSessionIdByWorkingDirectory: {
           '/Users/me/repo': 'thread_new_456',
+        },
+        workingDirectory: '/Users/me/repo',
+        workingDirectoryConfig: { path: '/Users/me/repo' },
+      });
+      expect(mockStopSession.mock.calls).toEqual([['ipc-sess-1'], ['ipc-sess-2']]);
+    });
+
+    it('starts a fresh Cursor ACP context after an old session cannot be loaded', async () => {
+      const store = createMockStore();
+      const get = vi.fn(() => store);
+      const sendPromptControllers = new Map<
+        string,
+        { reject: (reason?: unknown) => void; resolve: () => void }
+      >();
+      let startCount = 0;
+      mockStartSession.mockImplementation(async (params: any) => {
+        startCount += 1;
+        const sessionId = startCount === 1 ? 'ipc-sess-1' : 'ipc-sess-2';
+        ipc.setAgentType(sessionId, params.agentType);
+        return { sessionId };
+      });
+      mockSendPrompt.mockImplementation(
+        ({ sessionId }: { sessionId: string }) =>
+          new Promise<void>((resolve, reject) => {
+            sendPromptControllers.set(sessionId, { reject, resolve });
+          }),
+      );
+
+      const executorPromise = executeHeterogeneousAgent(get, {
+        ...defaultParams,
+        heterogeneousProvider: { command: 'agent', type: 'cursor' as const },
+        resumeSessionId: 'legacy-cursor-session',
+        workingDirectory: '/Users/me/repo',
+      });
+      await flush();
+
+      ipc.emitError('ipc-sess-1', {
+        agentType: 'cursor',
+        code: HeterogeneousAgentSessionErrorCode.ResumeThreadNotFound,
+        message:
+          'The saved Cursor session cannot be loaded through ACP, so a new conversation will start.',
+      });
+      await flush();
+      sendPromptControllers.get('ipc-sess-1')?.reject(new Error('resume failed'));
+      await flush();
+
+      expect(mockStartSession).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          agentType: 'cursor',
+          resumeSessionId: 'legacy-cursor-session',
+        }),
+      );
+      expect(mockStartSession).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ agentType: 'cursor', resumeSessionId: undefined }),
+      );
+      expect(store.updateTopicMetadata).toHaveBeenCalledWith('topic-1', {
+        heteroSessionId: undefined,
+        heteroSessionIdByWorkingDirectory: {},
+        workingDirectory: '/Users/me/repo',
+        workingDirectoryConfig: { path: '/Users/me/repo' },
+      });
+      expect(mockToastInfo).toHaveBeenCalledWith(
+        expect.stringMatching(/Cursor|cursorAcpIncompatible/),
+      );
+
+      ipc.emitComplete('ipc-sess-2');
+      await flush();
+      sendPromptControllers.get('ipc-sess-2')?.resolve();
+      await executorPromise;
+
+      expect(mockStopSession.mock.calls).toEqual([['ipc-sess-1'], ['ipc-sess-2']]);
+    });
+
+    it('retries Grok without resume when a recoverable session error follows a terminal event', async () => {
+      const store = createMockStore();
+      const get = vi.fn(() => store);
+      const sendPromptControllers = new Map<
+        string,
+        { reject: (reason?: unknown) => void; resolve: () => void }
+      >();
+      let startCount = 0;
+      mockStartSession.mockImplementation(async (params: any) => {
+        startCount += 1;
+        const sid = startCount === 1 ? 'ipc-sess-1' : 'ipc-sess-2';
+        ipc.setAgentType(sid, params.agentType ?? 'grok-build');
+        return { sessionId: sid };
+      });
+      mockSendPrompt.mockImplementation(
+        ({ sessionId }: { sessionId: string }) =>
+          new Promise<void>((resolve, reject) => {
+            sendPromptControllers.set(sessionId, { reject, resolve });
+          }),
+      );
+
+      const executorPromise = executeHeterogeneousAgent(get, {
+        ...defaultParams,
+        heterogeneousProvider: { command: 'grok', type: 'grok-build' as const },
+        resumeSessionId: 'missing-grok-session',
+        workingDirectory: '/Users/me/repo',
+      });
+      await flush();
+
+      ipc.emitStreamEvent('ipc-sess-1', {
+        data: {
+          agentType: 'grok-build',
+          details: { data: { code: 'FS_NOT_FOUND' } },
+          message: 'Path not found.',
+        },
+        type: 'error',
+      });
+      ipc.emitError('ipc-sess-1', {
+        agentType: 'grok-build',
+        code: HeterogeneousAgentSessionErrorCode.ResumeThreadNotFound,
+        message: 'The saved Grok Build session could not be found.',
+      });
+      await flush();
+
+      sendPromptControllers.get('ipc-sess-1')?.reject(new Error('resume failed'));
+      await flush();
+
+      expect(mockStartSession).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          agentType: 'grok-build',
+          resumeSessionId: 'missing-grok-session',
+        }),
+      );
+      expect(mockStartSession).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          agentType: 'grok-build',
+          resumeSessionId: undefined,
+        }),
+      );
+      expect(store.updateTopicMetadata).toHaveBeenCalledWith('topic-1', {
+        heteroSessionId: undefined,
+        heteroSessionIdByWorkingDirectory: {},
+        workingDirectory: '/Users/me/repo',
+        workingDirectoryConfig: { path: '/Users/me/repo' },
+      });
+
+      ipc.emitRawLine('ipc-sess-2', {
+        id: 2,
+        jsonrpc: '2.0',
+        result: { sessionId: 'grok-new-session' },
+      });
+      ipc.emitStreamEvent('ipc-sess-2', {
+        data: { reason: 'complete', transport: 'acp-stdio' },
+        type: 'agent_runtime_end',
+      });
+      ipc.emitComplete('ipc-sess-2');
+      await flush();
+
+      sendPromptControllers.get('ipc-sess-2')?.resolve();
+      await executorPromise;
+      await flush();
+
+      expect(store.updateTopicMetadata).toHaveBeenCalledWith('topic-1', {
+        heteroSessionId: 'grok-new-session',
+        heteroSessionIdByWorkingDirectory: {
+          '/Users/me/repo': 'grok-new-session',
         },
         workingDirectory: '/Users/me/repo',
         workingDirectoryConfig: { path: '/Users/me/repo' },
@@ -2166,6 +2593,54 @@ describe('heterogeneousAgentExecutor DB persistence', () => {
         );
         expect(t2Create).toBeDefined();
         expect(t2Create![0].parentId).toBe(attemptedAssistantId);
+      } finally {
+        consoleError.mockRestore();
+      }
+    });
+  });
+
+  describe('Desktop IPC session lifecycle', () => {
+    it('persists the native resume session before releasing the temporary run session', async () => {
+      const store = createMockStore();
+
+      await runWithEvents([ccInit('native-session-1'), ccResult()], { store });
+
+      expect(store.updateTopicMetadata).toHaveBeenCalledWith(
+        'topic-1',
+        expect.objectContaining({ heteroSessionId: 'native-session-1' }),
+      );
+      expect(mockStopSession).toHaveBeenCalledOnce();
+      expect(mockStopSession).toHaveBeenCalledWith('ipc-sess-1');
+
+      const lastMetadataSave = store.updateTopicMetadata.mock.invocationCallOrder.at(-1)!;
+      const stopSessionCall = mockStopSession.mock.invocationCallOrder[0];
+      expect(stopSessionCall).toBeGreaterThan(lastMetadataSave);
+    });
+
+    it('preserves the run error when temporary session cleanup fails', async () => {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const runError = new Error('prompt failed');
+      const cleanupError = new Error('cleanup failed');
+      mockSendPrompt.mockRejectedValueOnce(runError);
+      mockStopSession.mockRejectedValueOnce(cleanupError);
+
+      try {
+        const store = createMockStore();
+        const get = vi.fn(() => store);
+
+        await expect(executeHeterogeneousAgent(get, defaultParams)).resolves.toBeUndefined();
+
+        expect(mockUpdateMessageError).toHaveBeenCalledWith(
+          'ast-initial',
+          expect.objectContaining({ message: 'prompt failed' }),
+          expect.any(Object),
+        );
+        expect(mockStopSession).toHaveBeenCalledOnce();
+        expect(mockStopSession).toHaveBeenCalledWith('ipc-sess-1');
+        expect(consoleError).toHaveBeenCalledWith(
+          '[HeterogeneousAgent] IPC run session cleanup failed:',
+          cleanupError,
+        );
       } finally {
         consoleError.mockRestore();
       }

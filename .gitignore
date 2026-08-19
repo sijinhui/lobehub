@@ -162,4 +162,5 @@ docs/superpowers/
 .cursor
 
 # Amp agent runtime
-.amp/
+.amp/*
+!.amp/settings.json

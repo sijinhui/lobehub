@@ -19,27 +19,33 @@ vi.mock('@lobechat/heterogeneous-agents/client', () => ({
   getHeterogeneousAgentClientConfig: (type: string) =>
     type === 'claude-code'
       ? {
-          command: 'claude',
+          defaultCommand: 'claude',
           icon: () => <span>Claude Code Icon</span>,
           title: 'Claude Code',
         }
-      : type === 'opencode'
+      : type === 'kimi-code'
         ? {
-            command: 'opencode',
-            icon: () => <span>OpenCode Icon</span>,
-            title: 'OpenCode',
+            defaultCommand: 'kimi',
+            icon: () => <span>Kimi Code Icon</span>,
+            title: 'Kimi Code',
           }
-        : type === 'pi'
+        : type === 'opencode'
           ? {
-              command: 'pi',
-              icon: () => <span>Pi Icon</span>,
-              title: 'Pi',
+              defaultCommand: 'opencode',
+              icon: () => <span>OpenCode Icon</span>,
+              title: 'OpenCode',
             }
-          : {
-              command: 'codex',
-              icon: () => <span>Codex Icon</span>,
-              title: 'Codex',
-            },
+          : type === 'pi'
+            ? {
+                defaultCommand: 'pi',
+                icon: () => <span>Pi Icon</span>,
+                title: 'Pi',
+              }
+            : {
+                defaultCommand: 'codex',
+                icon: () => <span>Codex Icon</span>,
+                title: 'Codex',
+              },
   isRemoteHeterogeneousType: (type: string) => ['openclaw', 'hermes'].includes(type),
 }));
 
@@ -93,6 +99,31 @@ vi.mock('@lobehub/ui', () => ({
   Tooltip: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
 }));
 
+vi.mock('@lobehub/ui/base-ui', () => ({
+  Segmented: ({
+    disabled,
+    onChange,
+    options,
+  }: {
+    disabled?: boolean;
+    onChange?: (value: string) => void;
+    options: Array<{ disabled?: boolean; label: ReactNode; value: string }>;
+  }) => (
+    <div>
+      {options.map((option) => (
+        <button
+          disabled={disabled || option.disabled}
+          key={option.value}
+          type="button"
+          onClick={() => onChange?.(option.value)}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  ),
+}));
+
 vi.mock('antd-style', () => ({
   createStaticStyles: () => ({
     card: 'card',
@@ -116,6 +147,9 @@ vi.mock('react-i18next', () => ({
       (
         ({
           'heterogeneousStatus.account.label': 'Account',
+          'heterogeneousStatus.apiMode.enableInLabs': 'Enable in Labs',
+          'heterogeneousStatus.apiMode.labDisabled':
+            'API authentication is a Labs experiment. Enable it to use a configured provider instead of a Claude subscription.',
           'heterogeneousStatus.auth.api': 'API',
           'heterogeneousStatus.auth.label': 'Auth Method',
           'heterogeneousStatus.auth.subscription': 'Subscription',
@@ -134,6 +168,28 @@ vi.mock('react-i18next', () => ({
 vi.mock('@/features/Electron/HeterogeneousAgent/StatusGuide', () => ({
   default: ({ agentType }: { agentType?: string }) => (
     <div>{`${agentType ?? 'codex'} Install Guide`}</div>
+  ),
+}));
+
+vi.mock('@/features/HeterogeneousAgent/hooks/useClaudeCodeCompatibleProviders', () => ({
+  useClaudeCodeCompatibleProviders: () => ({
+    modelsByProvider: {
+      anthropic: [{ id: 'claude-primary', providerId: 'anthropic' }],
+    },
+    providers: [{ id: 'anthropic', name: 'Anthropic' }],
+  }),
+}));
+
+vi.mock('@/features/ModelSelect', () => ({
+  default: ({ allowClear, onClear }: { allowClear?: boolean; onClear?: () => void }) => (
+    <div>
+      Model Select
+      {allowClear && (
+        <button type="button" onClick={onClear}>
+          Clear model
+        </button>
+      )}
+    </div>
   ),
 }));
 
@@ -198,6 +254,32 @@ describe('HeterogeneousAgentStatusCard', () => {
     expect(screen.getByText('OpenCode CLI')).toBeInTheDocument();
     expect(screen.getByText('OpenCode CLI is unavailable')).toBeInTheDocument();
     expect(screen.getByText('opencode Install Guide')).toBeInTheDocument();
+  });
+
+  it('detects Kimi Code and shows its install guide when unavailable', async () => {
+    detectHeterogeneousAgentCommand.mockResolvedValue({ available: false });
+
+    const provider = {
+      command: 'kimi',
+      type: 'kimi-code',
+    } satisfies HeterogeneousProviderConfig;
+
+    render(
+      <MemoryRouter>
+        <HeterogeneousAgentStatusCard provider={provider} />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(detectHeterogeneousAgentCommand).toHaveBeenCalledWith({
+        agentType: 'kimi-code',
+        command: 'kimi',
+      });
+    });
+
+    expect(screen.getByText('Kimi Code CLI')).toBeInTheDocument();
+    expect(screen.getByText('Kimi Code CLI is unavailable')).toBeInTheDocument();
+    expect(screen.getByText('kimi-code Install Guide')).toBeInTheDocument();
   });
 
   it('detects Pi and shows its install guide when unavailable', async () => {
@@ -290,8 +372,7 @@ describe('HeterogeneousAgentStatusCard', () => {
     });
 
     expect(screen.getByText('claude-alt')).toBeInTheDocument();
-    expect(screen.getByText('Auth Method')).toBeInTheDocument();
-    expect(screen.getByText('Subscription')).toBeInTheDocument();
+    expect(screen.queryByText('Auth Method')).not.toBeInTheDocument();
     expect(screen.getByText('Plan')).toBeInTheDocument();
     expect(screen.getByText('MAX')).toBeInTheDocument();
     expect(screen.getByText('test@example.com')).toBeInTheDocument();
@@ -368,5 +449,89 @@ describe('HeterogeneousAgentStatusCard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Edit command' }));
 
     expect(await screen.findByDisplayValue('claude')).toBeInTheDocument();
+  });
+
+  it('shows API authentication only after the Labs experiment is enabled', async () => {
+    detectHeterogeneousAgentCommand.mockResolvedValue({ available: true });
+    getClaudeAuthStatus.mockResolvedValue(null);
+    const provider = {
+      command: 'claude',
+      type: 'claude-code',
+    } satisfies HeterogeneousProviderConfig;
+
+    const { rerender } = render(
+      <MemoryRouter>
+        <HeterogeneousAgentStatusCard apiModeAvailable provider={provider} />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('claude')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Auth Method')).not.toBeInTheDocument();
+
+    rerender(
+      <MemoryRouter>
+        <HeterogeneousAgentStatusCard apiModeAvailable apiModeLabEnabled provider={provider} />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Auth Method')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'API' })).toBeEnabled();
+  });
+
+  it('keeps leftover API mode visible so the agent can switch back when Labs is off', async () => {
+    detectHeterogeneousAgentCommand.mockResolvedValue({ available: true });
+    const provider = {
+      apiConfig: { model: 'claude-primary', providerId: 'anthropic' },
+      authMode: 'api',
+      command: 'claude',
+      type: 'claude-code',
+    } satisfies HeterogeneousProviderConfig;
+
+    render(
+      <MemoryRouter>
+        <HeterogeneousAgentStatusCard apiModeAvailable provider={provider} />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Auth Method')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'API' })).toBeDisabled();
+    expect(screen.getByText('Enable in Labs')).toBeInTheDocument();
+    expect(screen.queryByText('Model Select')).not.toBeInTheDocument();
+  });
+
+  it('persists null when clearing the small-fast model', async () => {
+    detectHeterogeneousAgentCommand.mockResolvedValue({ available: true });
+    const onApiConfigChange = vi.fn();
+    const provider = {
+      apiConfig: {
+        model: 'claude-primary',
+        providerId: 'anthropic',
+        smallFastModel: 'claude-fast',
+      },
+      authMode: 'api',
+      command: 'claude',
+      type: 'claude-code',
+    } satisfies HeterogeneousProviderConfig;
+
+    render(
+      <MemoryRouter>
+        <HeterogeneousAgentStatusCard
+          apiModeAvailable
+          apiModeLabEnabled
+          provider={provider}
+          onApiConfigChange={onApiConfigChange}
+        />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Clear model' }));
+
+    expect(onApiConfigChange).toHaveBeenCalledWith({
+      model: 'claude-primary',
+      providerId: 'anthropic',
+      smallFastModel: null,
+    });
   });
 });

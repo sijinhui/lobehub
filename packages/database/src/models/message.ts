@@ -30,6 +30,7 @@ import type { TimingSink } from '@lobechat/utils';
 import {
   getDurationMs,
   logTimingSink as logTiming,
+  readAudioDurationMs,
   runTimedSinkStage as runTimedStage,
 } from '@lobechat/utils';
 import { isPlainRecord } from '@lobechat/utils/object';
@@ -48,6 +49,7 @@ import {
   isNotNull,
   isNull,
   lte,
+  ne,
   not,
   or,
   sql,
@@ -77,6 +79,7 @@ import {
 } from '../schemas';
 import type { LobeChatDatabase, Transaction } from '../type';
 import { sanitizeBm25Query } from '../utils/bm25';
+import { notCopiedTranscript } from '../utils/copiedTranscript';
 import { genEndDateWhere, genRangeWhere, genStartDateWhere, genWhere } from '../utils/genWhere';
 import { idGenerator } from '../utils/idGenerator';
 import { buildWorkspacePayload, buildWorkspaceWhere } from '../utils/workspace';
@@ -155,10 +158,35 @@ interface MessageRelatedFile {
   fileType: string | null;
   id: string;
   messageId: string;
+  metadata: unknown;
   name: string | null;
   size: number | null;
   url: string;
 }
+
+const materializeChatAudioItem = ({
+  fileType,
+  id,
+  metadata,
+  name,
+  url,
+}: MessageRelatedFile): ChatAudioItem => {
+  const value = isPlainRecord(metadata) ? metadata : {};
+  const durationMs = readAudioDurationMs(metadata);
+
+  return {
+    alt: name!,
+    ...(typeof value.codec === 'string' ? { codec: value.codec } : {}),
+    ...(durationMs === undefined ? {} : { durationMs }),
+    id,
+    ...(typeof value.mimeType === 'string'
+      ? { mimeType: value.mimeType }
+      : fileType
+        ? { mimeType: fileType }
+        : {}),
+    url,
+  };
+};
 
 interface MessageChunkRelation {
   fileId: string;
@@ -389,6 +417,40 @@ export class MessageModel {
   // **************** Query *************** //
 
   /**
+   * The newest user message of each given topic, keyed by topic id. Used to
+   * pre-inject recent same-channel history for IM platforms that can't read
+   * chat history at runtime (e.g. WeChat). Only `role = 'user'` rows with
+   * non-empty text are considered.
+   */
+  queryLastUserMessageByTopics = async (topicIds: string[]): Promise<Map<string, string>> => {
+    if (topicIds.length === 0) return new Map();
+
+    const rows = await this.db
+      .selectDistinctOn([messages.topicId], {
+        content: messages.content,
+        topicId: messages.topicId,
+      })
+      .from(messages)
+      .where(
+        and(
+          this.ownership(),
+          inArray(messages.topicId, topicIds),
+          eq(messages.role, 'user'),
+          isNotNull(messages.content),
+          ne(messages.content, ''),
+        ),
+      )
+      .orderBy(messages.topicId, desc(messages.createdAt));
+
+    const result = new Map<string, string>();
+    for (const row of rows) {
+      const content = (row.content ?? '').trim();
+      if (row.topicId && content) result.set(row.topicId, content);
+    }
+    return result;
+  };
+
+  /**
    * Query messages by params (high-level API)
    *
    * This is the main query method that handles common query patterns.
@@ -447,6 +509,9 @@ export class MessageModel {
         () => this.buildThreadQueryCondition(threadId),
         { hasThreadId: true },
       );
+      // A topic thread may contain replies from delegated agents. When the topic is known,
+      // scope the complete thread to it instead of filtering those replies by the parent agent.
+      const threadScopeCondition = topicId ? this.matchTopic(topicId) : agentCondition;
       const messageItems = await this.queryWithWhere({
         current,
         includeFileWorks,
@@ -454,8 +519,8 @@ export class MessageModel {
         postProcessUrl: options.postProcessUrl,
         skipWorks,
         timing,
-        // Thread queries optionally add agent/session scope if provided
-        where: agentCondition ? and(agentCondition, threadCondition) : threadCondition,
+        topicId: topicId ?? undefined,
+        where: threadScopeCondition ? and(threadScopeCondition, threadCondition) : threadCondition,
       });
       logTiming(timing, 'db.message.query:done', {
         messageCount: messageItems.length,
@@ -892,8 +957,7 @@ export class MessageModel {
               works: worksByMessageId[item.id as string],
               audioList: audioList
                 .filter((relation) => relation.messageId === item.id)
-
-                .map<ChatAudioItem>(({ id, url, name }) => ({ alt: name!, id, url })),
+                .map<ChatAudioItem>(materializeChatAudioItem),
             } as unknown as UIChatMessage;
           },
         ),
@@ -997,6 +1061,7 @@ export class MessageModel {
             fileType: files.fileType,
             id: messagesFiles.fileId,
             messageId: messagesFiles.messageId,
+            metadata: files.metadata,
             name: files.name,
             size: files.size,
             url: files.url,
@@ -1340,6 +1405,7 @@ export class MessageModel {
           fileType: files.fileType,
           id: messagesFiles.fileId,
           messageId: messagesFiles.messageId,
+          metadata: files.metadata,
           name: files.name,
           size: files.size,
           url: files.url,
@@ -1530,7 +1596,7 @@ export class MessageModel {
             .map<ChatVideoItem>(({ id, url, name }) => ({ alt: name!, id, url })),
           audioList: audioList
             .filter((relation) => relation.messageId === item.id)
-            .map<ChatAudioItem>(({ id, url, name }) => ({ alt: name!, id, url })),
+            .map<ChatAudioItem>(materializeChatAudioItem),
         } as unknown as UIChatMessage;
       },
     );
@@ -2037,7 +2103,7 @@ export class MessageModel {
         id: messages.model,
       })
       .from(messages)
-      .where(and(this.ownership(), isNotNull(messages.model)))
+      .where(and(this.ownership(), isNotNull(messages.model), notCopiedTranscript()))
       .having(({ count }) => gt(count, 0))
       .groupBy(messages.model)
       .orderBy(desc(sql`count`), asc(messages.model))
@@ -2125,6 +2191,7 @@ export class MessageModel {
         genWhere([
           this.ownership(),
           eq(messages.role, 'assistant'),
+          notCopiedTranscript(),
           genRangeWhere(
             [startDate.format('YYYY-MM-DD'), endDate.add(1, 'day').format('YYYY-MM-DD')],
             messages.createdAt,
@@ -2752,30 +2819,55 @@ export class MessageModel {
 
     const heterogeneousMatch = sql`${messages.metadata}->>'heterogeneousToolStateOperationId' = ${params.operationId}`;
 
-    const rows = await this.db
-      .select({
-        apiName: messagePlugins.apiName,
-        arguments: messagePlugins.arguments,
-        clientId: messagePlugins.clientId,
-        // The tool message's text body. Heterogeneous CLI adapters (claude-code
-        // Bash) persist the command's stdout here rather than in a structured
-        // `state` field, and the completion-time github Work scan reads the gh
-        // CLI's printed entity URL from it.
-        content: messages.content,
-        createdAt: messages.createdAt,
-        error: messagePlugins.error,
-        id: messagePlugins.id,
-        identifier: messagePlugins.identifier,
-        intervention: messagePlugins.intervention,
-        state: messagePlugins.state,
-        toolCallId: messagePlugins.toolCallId,
-        type: messagePlugins.type,
-        userId: messagePlugins.userId,
-      })
-      .from(messagePlugins)
-      .innerJoin(messages, eq(messagePlugins.id, messages.id))
-      .where(and(this.ownership(), this.pluginsOwnership(), or(withinWindow, heterogeneousMatch)))
-      .orderBy(asc(messages.createdAt), asc(messages.id));
+    // Query the two conditions SEPARATELY instead of `OR`-ing them in one WHERE.
+    // A combined `... AND (withinWindow OR heterogeneousMatch)` is unindexable: the
+    // `metadata->>'heterogeneousToolStateOperationId'` branch has no index, so the
+    // planner abandons the `topic_id` index for the whole predicate and scans every
+    // plugin row the user owns (100k+ for heavy users), probing `messages` once per
+    // row — 25s+ per call in the worst case. Splitting lets each branch use its own
+    // index (topic-window range scan vs. the exact jsonb lookup). The branches can
+    // overlap (a heterogeneous row that also falls inside the window), so de-dup by
+    // message id before restoring the `createdAt asc, id asc` order the OR query
+    // produced in SQL.
+    const projection = {
+      apiName: messagePlugins.apiName,
+      arguments: messagePlugins.arguments,
+      clientId: messagePlugins.clientId,
+      // The tool message's text body. Heterogeneous CLI adapters (claude-code
+      // Bash) persist the command's stdout here rather than in a structured
+      // `state` field, and the completion-time github Work scan reads the gh
+      // CLI's printed entity URL from it.
+      content: messages.content,
+      createdAt: messages.createdAt,
+      error: messagePlugins.error,
+      id: messagePlugins.id,
+      identifier: messagePlugins.identifier,
+      intervention: messagePlugins.intervention,
+      state: messagePlugins.state,
+      toolCallId: messagePlugins.toolCallId,
+      type: messagePlugins.type,
+      userId: messagePlugins.userId,
+    };
+
+    const scan = (condition: SQL | undefined) =>
+      this.db
+        .select(projection)
+        .from(messagePlugins)
+        .innerJoin(messages, eq(messagePlugins.id, messages.id))
+        .where(and(this.ownership(), this.pluginsOwnership(), condition));
+
+    const [windowRows, heterogeneousRows] = await Promise.all([
+      scan(withinWindow),
+      scan(heterogeneousMatch),
+    ]);
+
+    const byId = new Map<string, (typeof windowRows)[number]>();
+    for (const row of windowRows) byId.set(row.id, row);
+    for (const row of heterogeneousRows) if (!byId.has(row.id)) byId.set(row.id, row);
+
+    const rows = [...byId.values()].sort(
+      (a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id),
+    );
 
     return rows.map((row) => ({
       apiName: row.apiName ?? undefined,
@@ -2792,6 +2884,87 @@ export class MessageModel {
       type: row.type ?? 'default',
       userId: row.userId,
     }));
+  };
+
+  /**
+   * Load specific tool-call rows by their message ids, ownership-scoped and
+   * pinned to one topic. Serves the LOCAL hetero run work scan
+   * (`work.registerShellWorksForRun`): a desktop-local CLI run has no
+   * `agent_operations` row, so the client reports the exact tool message ids it
+   * persisted instead of the server reconstructing an operation window. The
+   * topic pin means a caller can never scan rows outside the conversation it
+   * claims to complete.
+   */
+  listMessagePluginsByIds = async (params: {
+    ids: string[];
+    topicId: string;
+  }): Promise<Array<MessagePluginItem & { content?: string; createdAt: Date }>> => {
+    if (params.ids.length === 0) return [];
+
+    const rows = await this.db
+      .select({
+        apiName: messagePlugins.apiName,
+        arguments: messagePlugins.arguments,
+        clientId: messagePlugins.clientId,
+        // The tool message's text body — claude-code Bash persists the
+        // command's stdout here (see listMessagePluginsForOperation).
+        content: messages.content,
+        createdAt: messages.createdAt,
+        error: messagePlugins.error,
+        id: messagePlugins.id,
+        identifier: messagePlugins.identifier,
+        intervention: messagePlugins.intervention,
+        state: messagePlugins.state,
+        toolCallId: messagePlugins.toolCallId,
+        type: messagePlugins.type,
+        userId: messagePlugins.userId,
+      })
+      .from(messagePlugins)
+      .innerJoin(messages, eq(messagePlugins.id, messages.id))
+      .where(
+        and(
+          inArray(messagePlugins.id, params.ids),
+          eq(messages.topicId, params.topicId),
+          this.ownership(),
+          this.pluginsOwnership(),
+        ),
+      );
+
+    const sorted = [...rows].sort(
+      (a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id),
+    );
+
+    return sorted.map((row) => ({
+      apiName: row.apiName ?? undefined,
+      arguments: row.arguments ?? undefined,
+      clientId: row.clientId ?? undefined,
+      content: row.content ?? undefined,
+      createdAt: row.createdAt,
+      error: row.error ?? undefined,
+      id: row.id,
+      identifier: row.identifier ?? undefined,
+      intervention: row.intervention ?? undefined,
+      state: row.state ?? undefined,
+      toolCallId: row.toolCallId ?? undefined,
+      type: row.type ?? 'default',
+      userId: row.userId,
+    }));
+  };
+
+  /**
+   * Resolve the tool result message id for a toolCallId — the stable identifier
+   * the model emitted for the call. Lets server-side services push async state
+   * onto a tool card when all they hold is the call id recorded at creation
+   * time (e.g. the goal loop updating the `createGoal` card via
+   * `task.context.origin.toolCallId`).
+   */
+  findToolMessageIdByToolCallId = async (toolCallId: string): Promise<string | null> => {
+    const [row] = await this.db
+      .select({ id: messagePlugins.id })
+      .from(messagePlugins)
+      .where(and(eq(messagePlugins.toolCallId, toolCallId), this.pluginsOwnership()))
+      .limit(1);
+    return row?.id ?? null;
   };
 
   /**
@@ -3031,6 +3204,41 @@ export class MessageModel {
    */
   getLastMainThreadSpineMessageId = async (topicId: string): Promise<string | undefined> =>
     this.getLatestSpineMessageId({ topicId, threadId: null });
+
+  /**
+   * Whether `descendantId` belongs to the branch rooted at `ancestorId`.
+   *
+   * Used when reconciling a client-selected conversation tail with the latest
+   * server row: a newer row may be a sibling from a historical callback fork,
+   * not an advancement of the branch the user is viewing.
+   */
+  isMessageDescendantOf = async ({
+    ancestorId,
+    descendantId,
+    topicId,
+  }: {
+    ancestorId: string;
+    descendantId: string;
+    topicId: string;
+  }): Promise<boolean> => {
+    const result = await this.db.execute(sql`
+      WITH RECURSIVE ancestors(id, parent_id) AS (
+        SELECT id, parent_id
+        FROM messages
+        WHERE id = ${descendantId}
+          AND topic_id = ${topicId}
+          AND ${this.ownership()}
+        UNION
+        SELECT parent.id, parent.parent_id
+        FROM messages parent
+        JOIN ancestors child ON parent.id = child.parent_id
+        WHERE parent.topic_id = ${topicId}
+      )
+      SELECT 1 AS hit FROM ancestors WHERE id = ${ancestorId} LIMIT 1
+    `);
+
+    return result.rows.length > 0;
+  };
 
   /**
    * Thread-aware variant of {@link getLastMainThreadSpineMessageId}: the id of

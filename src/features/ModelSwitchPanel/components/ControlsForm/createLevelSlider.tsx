@@ -1,14 +1,13 @@
 'use client';
 
 import type { LobeAgentChatConfig } from '@lobechat/types';
-import type { SliderSingleProps } from 'antd/es/slider';
 import type { CSSProperties } from 'react';
 import { memo } from 'react';
 
 import { useAgentStore } from '@/store/agent';
 import { chatConfigByIdSelectors } from '@/store/agent/selectors';
 
-import LevelSlider from './LevelSlider';
+import LevelSlider, { type LevelSliderMark } from './LevelSlider';
 
 export interface LevelSliderConfig<T extends string> {
   /**
@@ -26,7 +25,7 @@ export interface LevelSliderConfig<T extends string> {
   /**
    * Optional custom marks for the slider
    */
-  marks?: SliderSingleProps['marks'];
+  marks?: Record<number, LevelSliderMark>;
   /**
    * Optional style for the slider container
    */

@@ -39,25 +39,26 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  Sparkles,
   X,
   XCircle,
 } from 'lucide-react';
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
 
 import NeuralNetworkLoading from '@/components/NeuralNetworkLoading';
-import AgentProfilePopup from '@/features/AgentProfileCard/AgentProfilePopup';
 import { openCheckEditModal } from '@/features/Conversation/ChatInput/VerifyTray/EditModal';
 import { openGoalModal } from '@/features/Conversation/ChatInput/VerifyTray/GoalModal';
 import NavItem from '@/features/NavPanel/components/NavItem';
+import { useIsHydrated } from '@/hooks/useIsHydrated';
 import { useLocalStorageState } from '@/hooks/useLocalStorageState';
+import { useSingleton } from '@/hooks/useSingleton';
 // The workspace-scoped mutate — a bare `import { mutate } from 'swr'` misses
 // every `useClientDataSWR` subscriber (augmented keys + custom cache provider).
 import { mutate as globalMutate } from '@/libs/swr';
 import { verifyKeys } from '@/libs/swr/keys';
 import { verifyService } from '@/services/verify';
-import { useTaskStore } from '@/store/task';
 
 import { useAcceptanceBundle } from '../hooks';
 import ReportViewer from '../ReportViewer';
@@ -74,6 +75,7 @@ import CheckList, {
   isCheckWorkActionable,
   isException,
   isGroupFullyAccepted,
+  type ProposalDismissInput,
   shouldGroupChecks,
   userReviewState,
 } from './CheckList';
@@ -83,10 +85,10 @@ import { EMPTY_ID_SET, setAggregateEntry } from './expandState';
 import FeedbackDrawer, { type FeedbackListEntry } from './FeedbackDrawer';
 import { acceptanceFocusedLayout, acceptanceScrollLayout } from './layout';
 import LedgerPanel, { type AcceptanceRound } from './LedgerPanel';
-import { openAcceptModal, openRejectModal } from './modals';
+import { openAcceptModal, openGroupFeedbackModal, openRejectModal } from './modals';
+import { useOriginConversation } from './originConversation';
 import { acceptanceCheckPath, acceptanceOverviewPath } from './routes';
 import { getAcceptanceStatusActions } from './statusActions';
-import TopicPanel from './TopicPanel';
 import { canViewAcceptanceHistory, resolveAcceptanceHistoryNavigation } from './visibility';
 
 const styles = createStaticStyles(({ css }) => ({
@@ -155,8 +157,6 @@ const styles = createStaticStyles(({ css }) => ({
 
     overflow: hidden;
 
-    /* AppTheme's root is a centered flex column — without an explicit width the page
-       shrinks to content width and the ledger hugs the shrunken edge, not the viewport */
     width: 100%;
     height: 100%;
 
@@ -298,6 +298,11 @@ interface AcceptancePageProps {
   onDraftToComposer?: (text: string) => boolean;
 }
 
+/** How long to wait between bundle re-fetches while the batch runs. */
+const PREDICT_POLL_INTERVAL_MS = 4000;
+/** ~2 minutes: a bounded batch of 4-concurrent generations settles well inside this. */
+const PREDICT_POLL_ATTEMPTS = 30;
+
 const AcceptancePage = memo<AcceptancePageProps>(
   ({ acceptanceId: explicitAcceptanceId, onDraftToComposer }) => {
     const params = useParams<{ acceptanceId: string; checkId: string }>();
@@ -307,9 +312,12 @@ const AcceptancePage = memo<AcceptancePageProps>(
     const isEmbedded = Boolean(explicitAcceptanceId);
     const navigate = useNavigate();
     const { t } = useTranslation('verify');
-    const { data, error, isLoading, mutate } = useAcceptanceBundle(acceptanceId ?? null);
-    const openTopicDrawer = useTaskStore((s) => s.openTopicDrawer);
-    const closeTopicDrawer = useTaskStore((s) => s.closeTopicDrawer);
+    const hydrated = useIsHydrated();
+    const { data, isLoading, mutate } = useAcceptanceBundle(acceptanceId ?? null);
+    const originConversation = useOriginConversation();
+    const openTopicDrawer = originConversation?.openTopicDrawer;
+    const closeTopicDrawer = originConversation?.closeTopicDrawer;
+    const OriginTopicPanel = originConversation?.TopicPanel;
     // Below `lg` the report body and a 300px+ in-flow ledger cannot share the
     // viewport — the ledger switches to a float overlay, closed by default (the
     // same narrow regime the list panel uses).
@@ -324,7 +332,7 @@ const AcceptancePage = memo<AcceptancePageProps>(
     // later task/home surface that also mounts TopicChatDrawer.
     useEffect(
       () => () => {
-        if (!isEmbedded) closeTopicDrawer();
+        if (!isEmbedded) closeTopicDrawer?.();
       },
       [closeTopicDrawer, isEmbedded],
     );
@@ -386,7 +394,7 @@ const AcceptancePage = memo<AcceptancePageProps>(
     // Which aggregates have had their one-time defaults (expand/collapse + filter)
     // applied. A Set, not a single id, so returning to an already-seeded aggregate
     // does NOT re-apply defaults and clobber the toggles the user made.
-    const seededIdsRef = useRef<Set<string>>(new Set());
+    const seededIds = useSingleton(() => new Set<string>());
     const [highlightRound, setHighlightRound] = useState<number | null>(null);
     const [ledgerExpand, setLedgerExpand] = useState(!isEmbedded);
     const [topicPanelOpen, setTopicPanelOpen] = useState(false);
@@ -421,11 +429,11 @@ const AcceptancePage = memo<AcceptancePageProps>(
     }
     const closeTopicPanel = useCallback(() => {
       setTopicPanelOpen(false);
-      closeTopicDrawer();
+      closeTopicDrawer?.();
     }, [closeTopicDrawer]);
 
     const openTopicPanel = useCallback(() => {
-      if (!data?.origin?.topic) return;
+      if (!openTopicDrawer || !data?.origin?.topic) return;
       openTopicDrawer(data.origin.topic.id, {
         agentId: data.origin.agent?.id,
         title: data.origin.topic.title ?? data.subject.title ?? data.origin.topic.id,
@@ -433,6 +441,24 @@ const AcceptancePage = memo<AcceptancePageProps>(
       setTopicPanelOpen(true);
       setLedgerExpand(true);
     }, [data, openTopicDrawer]);
+
+    /**
+     * An agent judge argues by running, not by writing a paragraph — so the
+     * reviewable form of its verdict is its own conversation. Resolve the
+     * verifier operation to its topic and open the same drawer used for the
+     * origin run.
+     */
+    const openVerifierTrace = useCallback(
+      async (verifierOperationId: string) => {
+        if (!openTopicDrawer) return;
+        const resolved = await verifyService.getVerifierThread(verifierOperationId);
+        const topicId = resolved?.topicId;
+        if (!topicId) return;
+        openTopicDrawer(topicId, { title: t('acceptance.checks.viewTrace') });
+        setTopicPanelOpen(true);
+      },
+      [openTopicDrawer, t],
+    );
     const [reportRound, setReportRound] = useState<AcceptanceRound | null>(null);
     // `?r=<roundIndex>` deep-links one round's full report — a durable
     // per-round snapshot URL (standalone page only; the portal embed rides the
@@ -453,6 +479,7 @@ const AcceptancePage = memo<AcceptancePageProps>(
     const [rerunPending, setRerunPending] = useState(false);
     const [actionError, setActionError] = useState<string>();
     const [feedbackOpen, setFeedbackOpen] = useState(false);
+    const [predicting, setPredicting] = useState(false);
 
     const status = data?.acceptance.status;
 
@@ -465,15 +492,15 @@ const AcceptancePage = memo<AcceptancePageProps>(
 
     // Exceptions and visually-evidenced checks start expanded (P-08) — a check
     // still awaiting the user's review shows its evidence (screenshots included)
-    // up front, not folded away. Seeded once per aggregate (see `seededIdsRef`),
+    // up front, not folded away. Seeded once per aggregate (see `seededIds`),
     // and only after its checks have arrived, so the user's own toggling is never
     // overwritten and an aggregate whose checks stream in a beat late still seeds.
     // A check the user already accepted is settled business and stays folded
     // regardless of its evidence; groups accepted in full start collapsed too.
     useEffect(() => {
       if (!data || data.checks.length === 0) return;
-      if (seededIdsRef.current.has(acceptanceId ?? '')) return;
-      seededIdsRef.current.add(acceptanceId ?? '');
+      if (seededIds.has(acceptanceId ?? '')) return;
+      seededIds.add(acceptanceId ?? '');
       setExpanded(
         new Set(
           data.checks
@@ -516,6 +543,7 @@ const AcceptancePage = memo<AcceptancePageProps>(
       t,
       isEmbedded,
       urlFilterRaw,
+      seededIds,
       setSearchParams,
       setExpanded,
       setCollapsedGroups,
@@ -536,6 +564,24 @@ const AcceptancePage = memo<AcceptancePageProps>(
         uncertain: checks.filter((check) => check.state === 'uncertain').length,
       };
     }, [data]);
+
+    /**
+     * Checks the predictor could actually act on: executed (so there is a
+     * result to judge), not yet ruled on, and carrying a frame to look at.
+     *
+     * Deliberately NOT `counts.pending`, which counts any check without a
+     * standing review — including ones that never ran. That gate showed the
+     * button on acceptances where the server would consider zero checks, and
+     * the reverse case reads even worse: a page whose remaining "pending" item
+     * is un-executed loses the button with no visible reason.
+     */
+    const predictableCount = useMemo(
+      () =>
+        (data?.checks ?? []).filter(
+          (check) => check.result && !check.result.userDecision && hasVisualEvidence(check),
+        ).length,
+      [data],
+    );
 
     const acceptanceRecordId = data?.acceptance.id;
     const runAction = useCallback(
@@ -569,6 +615,57 @@ const AcceptancePage = memo<AcceptancePageProps>(
       [runAction, acceptanceRecordId],
     );
 
+    // Answering a model proposal is NOT a verdict on the check — the check
+    // stays pending and still needs the reviewer's own call. It goes through
+    // its own endpoint so a dismissal can never stamp a `user_decision`.
+    const handleDismissProposal = useCallback(
+      async (input: ProposalDismissInput) => {
+        if (!acceptanceRecordId) return;
+        await runAction(() =>
+          verifyService.adjudicateProposal({
+            adjudication: input.adjudication,
+            id: acceptanceRecordId,
+            predictionId: input.predictionId,
+          }),
+        );
+      },
+      [runAction, acceptanceRecordId],
+    );
+
+    /**
+     * Ask for proposals on whatever is still awaiting a verdict. Explicit, so
+     * opening a report never spends model budget on its own.
+     *
+     * The server dispatches the batch AFTER responding, so the mutation returns
+     * in milliseconds with nothing to show. Poll the bundle until the cards
+     * land, keeping the button in its loading state meanwhile — otherwise the
+     * click reads as a no-op for the ~15s the first generation takes.
+     */
+    const handlePredictReviews = useCallback(async () => {
+      if (!acceptanceRecordId) return;
+      setPredicting(true);
+      try {
+        const { queued } = await verifyService.predictReviews(acceptanceRecordId);
+        if (queued === 0) return;
+
+        for (let attempt = 0; attempt < PREDICT_POLL_ATTEMPTS; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, PREDICT_POLL_INTERVAL_MS));
+          const next = await mutate();
+          // Stop as soon as every queued check has been answered one way or the
+          // other — a check the model passes writes no row, so waiting for
+          // `queued` cards would always run to the timeout.
+          const settled = (next?.checks ?? []).filter(
+            (check) => check.prediction || check.result?.userDecision,
+          ).length;
+          if (settled >= queued) break;
+        }
+      } catch (error) {
+        setActionError(error instanceof Error ? error.message : String(error));
+      } finally {
+        setPredicting(false);
+      }
+    }, [mutate, acceptanceRecordId]);
+
     // Group-scoped feedback — for concerns that belong to no single check (the
     // checks themselves may be accepted) yet must reach the next round.
     const handleGroupFeedback = useCallback(
@@ -585,6 +682,17 @@ const AcceptancePage = memo<AcceptancePageProps>(
       },
       [runAction, acceptanceRecordId],
     );
+
+    // The decision bar's global note — the same group-feedback channel, aimed
+    // at the uncategorized bucket ('' targets the whole delivery).
+    const handleAddGlobalComment = useCallback(() => {
+      openGroupFeedbackModal({
+        description: t('acceptance.bar.addCommentDescription'),
+        groupLabel: t('acceptance.feedback.global'),
+        onConfirm: (comment, fileIds) => handleGroupFeedback('', comment, fileIds),
+        title: t('acceptance.bar.addComment'),
+      });
+    }, [handleGroupFeedback, t]);
 
     const gotoRound = useCallback((round: number) => {
       setHighlightRound(round);
@@ -641,14 +749,14 @@ const AcceptancePage = memo<AcceptancePageProps>(
       [data],
     );
 
-    if (isLoading)
+    if (isLoading && !data)
       return (
         <Center height={'100%'}>
           <NeuralNetworkLoading size={48} />
         </Center>
       );
 
-    if (error || !data)
+    if (!data)
       return (
         <Center height={'100%'}>
           <Empty
@@ -906,9 +1014,10 @@ const AcceptancePage = memo<AcceptancePageProps>(
     const barTexts = {
       accepted: {
         statusText: t('acceptance.banner.accepted', {
-          time: acceptance.completedAt
-            ? dayjs(acceptance.completedAt).format('YYYY-MM-DD HH:mm')
-            : '',
+          time:
+            hydrated && acceptance.completedAt
+              ? dayjs(acceptance.completedAt).format('YYYY-MM-DD HH:mm')
+              : '',
         }),
         subText: `${countsText} · ${t('acceptance.banner.acceptedHint', { count: rounds.length })}`,
       },
@@ -1161,7 +1270,7 @@ const AcceptancePage = memo<AcceptancePageProps>(
                     <Text fontSize={12} type={'secondary'}>
                       {[
                         countsText,
-                        currentRound
+                        hydrated && currentRound
                           ? t('acceptance.verdict.latestAt', {
                               time: dayjs(currentRound.run.createdAt).format('MM-DD HH:mm'),
                             })
@@ -1186,32 +1295,22 @@ const AcceptancePage = memo<AcceptancePageProps>(
                   {!isEmbedded && (originAgent || originTopic || scope?.pullRequest?.number) && (
                     <Flexbox horizontal align={'center'} gap={16} wrap={'wrap'}>
                       {originAgent && (
-                        <AgentProfilePopup
-                          agentId={originAgent.id}
-                          trigger={'hover'}
-                          agent={{
-                            avatar: originAgent.avatar ?? undefined,
-                            backgroundColor: originAgent.backgroundColor ?? undefined,
-                            title: originAgent.title ?? undefined,
-                          }}
+                        <Flexbox
+                          horizontal
+                          align={'center'}
+                          className={styles.scopeChip}
+                          gap={6}
+                          style={{ cursor: 'default', fontSize: 14 }}
                         >
-                          <Flexbox
-                            horizontal
-                            align={'center'}
-                            className={styles.scopeChip}
-                            gap={6}
-                            style={{ cursor: 'default', fontSize: 14 }}
-                          >
-                            <Avatar
-                              avatar={originAgent.avatar ?? undefined}
-                              background={originAgent.backgroundColor ?? undefined}
-                              size={18}
-                            />
-                            {originAgent.title ?? t('acceptance.origin.agentFallback')}
-                          </Flexbox>
-                        </AgentProfilePopup>
+                          <Avatar
+                            avatar={originAgent.avatar ?? undefined}
+                            background={originAgent.backgroundColor ?? undefined}
+                            size={18}
+                          />
+                          {originAgent.title ?? t('acceptance.origin.agentFallback')}
+                        </Flexbox>
                       )}
-                      {originTopic && (
+                      {originTopic && originConversation && (
                         <Button
                           className={cx(styles.scopeChip, styles.scopeLink)}
                           icon={MessagesSquare}
@@ -1644,6 +1743,7 @@ const AcceptancePage = memo<AcceptancePageProps>(
                       canReview={isOwner}
                       check={focusedCheck}
                       reviewPending={pending}
+                      onDismissProposal={handleDismissProposal}
                       onReview={handleReview}
                       onRound={historyNavigation}
                     />
@@ -1668,6 +1768,18 @@ const AcceptancePage = memo<AcceptancePageProps>(
                     {counts.total + unverifiedStandingChecks.length}
                   </span>
                   <Flexbox flex={1} />
+                  {/* Explicit, and only while something is still unreviewed —
+                    asking for proposals on a fully-judged acceptance would
+                    spend budget to produce cards nobody can act on. */}
+                  {isOwner && predictableCount > 0 && (
+                    <ActionIcon
+                      icon={Sparkles}
+                      loading={predicting}
+                      size={'small'}
+                      title={t('acceptance.proposal.request')}
+                      onClick={handlePredictReviews}
+                    />
+                  )}
                   {isOwner && (
                     <ActionIcon
                       icon={Plus}
@@ -1786,7 +1898,9 @@ const AcceptancePage = memo<AcceptancePageProps>(
                   groupFeedback={groupFeedbackEntries}
                   reviewPending={pending}
                   round={roundFilter}
+                  onDismissProposal={handleDismissProposal}
                   onGroupFeedback={handleGroupFeedback}
+                  onOpenTrace={originConversation ? openVerifierTrace : undefined}
                   onReview={handleReview}
                   onRound={historyNavigation}
                   onToggleGroup={handleToggleGroup}
@@ -1813,6 +1927,7 @@ const AcceptancePage = memo<AcceptancePageProps>(
                 subText={barTexts.subText}
                 totalCount={reviewTotal}
                 onAccept={handleAccept}
+                onAddComment={handleAddGlobalComment}
                 onCopyReview={handleCopyReview}
                 onOpenFeedback={() => setFeedbackOpen(true)}
                 onRejectComment={handleRejectComment}
@@ -1851,8 +1966,8 @@ const AcceptancePage = memo<AcceptancePageProps>(
               width={'min(340px, 88vw)'}
               onClose={() => setLedgerExpand(false)}
             >
-              {topicPanelOpen && origin?.agent?.id && origin.topic ? (
-                <TopicPanel
+              {topicPanelOpen && origin?.agent?.id && origin.topic && OriginTopicPanel ? (
+                <OriginTopicPanel
                   agentId={origin.agent.id}
                   title={origin.topic.title ?? subject.title ?? origin.topic.id}
                   topicId={origin.topic.id}
@@ -1880,8 +1995,8 @@ const AcceptancePage = memo<AcceptancePageProps>(
               onExpandChange={setLedgerExpand}
             >
               <Flexbox style={{ height: '100%', minHeight: 0, overflow: 'hidden' }}>
-                {topicPanelOpen && origin?.agent?.id && origin.topic ? (
-                  <TopicPanel
+                {topicPanelOpen && origin?.agent?.id && origin.topic && OriginTopicPanel ? (
+                  <OriginTopicPanel
                     agentId={origin.agent.id}
                     title={origin.topic.title ?? subject.title ?? origin.topic.id}
                     topicId={origin.topic.id}
