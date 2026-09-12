@@ -70,6 +70,7 @@ const createMessageTransport = (): MessageTransport => ({
   createToolMessage: vi.fn(),
   deleteMessage: vi.fn(),
   findById: vi.fn().mockResolvedValue({ id: 'parent-1' }),
+  findToolMessageIdByToolCallId: vi.fn(),
   query: vi.fn(),
   update: vi.fn(),
   updatePluginState: vi.fn(),
@@ -136,7 +137,7 @@ const createCallTransport = ({
   trace = createTrace(),
 }: {
   policy?: LLMRetryPolicy;
-  runAttempt?: ReturnType<typeof vi.fn>;
+  runAttempt?: LLMTransport['runAttempt'];
   trace?: LLMTrace;
 } = {}) => {
   const createTraceScope = vi.fn().mockReturnValue(trace);

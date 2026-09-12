@@ -1,5 +1,6 @@
 'use client';
 
+import DevSeedSignIn from './DevSeedSignIn';
 import { SignInEmailSentStep } from './SignInEmailSentStep';
 import { SignInEmailStep } from './SignInEmailStep';
 import { SignInPasswordStep } from './SignInPasswordStep';
@@ -57,24 +58,27 @@ const SignIn = () => {
     );
 
   return (
-    <SignInEmailStep
-      disableEmailPassword={disableEmailPassword}
-      form={form as any}
-      isSocialOnly={isSocialOnly}
-      lastAuthProvider={lastAuthProvider}
-      loading={loading}
-      oAuthSSOProviders={oAuthSSOProviders}
-      passkeyLoading={passkeyLoading}
-      serverConfigInit={serverConfigInit}
-      sessionExpired={sessionExpired}
-      socialLoading={socialLoading}
-      onCheckUser={handleCheckUser}
-      onGoToSignup={handleGoToSignup}
-      onPasskeySignIn={handlePasskeySignIn}
-      onResetEmail={handleBackToEmail}
-      onSetPassword={handleForgotPassword}
-      onSocialSignIn={handleSocialSignIn}
-    />
+    <>
+      <SignInEmailStep
+        disableEmailPassword={disableEmailPassword}
+        form={form as any}
+        isSocialOnly={isSocialOnly}
+        lastAuthProvider={lastAuthProvider}
+        loading={loading}
+        oAuthSSOProviders={oAuthSSOProviders}
+        passkeyLoading={passkeyLoading}
+        serverConfigInit={serverConfigInit}
+        sessionExpired={sessionExpired}
+        socialLoading={socialLoading}
+        onCheckUser={handleCheckUser}
+        onGoToSignup={handleGoToSignup}
+        onPasskeySignIn={handlePasskeySignIn}
+        onResetEmail={handleBackToEmail}
+        onSetPassword={handleForgotPassword}
+        onSocialSignIn={handleSocialSignIn}
+      />
+      <DevSeedSignIn />
+    </>
   );
 };
 

@@ -1190,6 +1190,25 @@ describe('AgentModel', () => {
   });
 
   describe('updateConfig', () => {
+    it('replaces the profile wholesale so a removed trait can be cleared', async () => {
+      const agent = await serverDB
+        .insert(agents)
+        .values({
+          profile: { artworkStyle: 'anime', fullBodyArtwork: 'https://cdn/full-body.png' },
+          userId,
+        })
+        .returning()
+        .then((res) => res[0]);
+
+      await agentModel.updateConfig(agent.id, { profile: { artworkStyle: 'anime' } });
+
+      const result = await serverDB.query.agents.findFirst({
+        where: eq(agents.id, agent.id),
+      });
+
+      expect(result?.profile).toEqual({ artworkStyle: 'anime' });
+    });
+
     it('should update agent config and set updatedAt', async () => {
       const agent = await serverDB
         .insert(agents)
@@ -1248,6 +1267,110 @@ describe('AgentModel', () => {
         model: 'claude-primary',
         providerId: 'anthropic',
         smallFastModel: null,
+      });
+    });
+
+    it('should preserve omitted API binding fields during same-provider partial updates', async () => {
+      const agent = await agentModel.create({
+        agencyConfig: {
+          heterogeneousProvider: {
+            apiConfig: {
+              model: 'claude-primary',
+              providerId: 'anthropic',
+              smallFastModel: 'claude-fast',
+            },
+            authMode: 'api',
+            type: 'claude-code',
+          },
+        },
+      });
+
+      await agentModel.updateConfig(agent.id, {
+        agencyConfig: {
+          heterogeneousProvider: {
+            apiConfig: { smallFastModel: 'claude-fast-updated' },
+          },
+        },
+      });
+      await agentModel.updateConfig(agent.id, {
+        agencyConfig: {
+          heterogeneousProvider: {
+            apiConfig: { model: 'claude-primary-updated' },
+          },
+        },
+      });
+
+      const result = await serverDB.query.agents.findFirst({ where: eq(agents.id, agent.id) });
+
+      expect(result?.agencyConfig?.heterogeneousProvider?.apiConfig).toEqual({
+        model: 'claude-primary-updated',
+        providerId: 'anthropic',
+        smallFastModel: 'claude-fast-updated',
+      });
+    });
+
+    it('should not persist a client-selected provider for the deployment API binding', async () => {
+      const agent = await agentModel.create({
+        agencyConfig: {
+          heterogeneousProvider: {
+            authMode: 'api',
+            type: 'claude-code',
+          },
+        },
+      });
+
+      await agentModel.updateConfig(agent.id, {
+        agencyConfig: {
+          heterogeneousProvider: {
+            apiConfig: {
+              apiKey: 'must-not-persist',
+              model: 'claude-server',
+              providerId: 'must-not-persist',
+              smallFastModel: 'must-not-persist',
+              source: 'server-default',
+            },
+          },
+        },
+      } as any);
+
+      const result = await serverDB.query.agents.findFirst({ where: eq(agents.id, agent.id) });
+
+      expect(result?.agencyConfig?.heterogeneousProvider?.apiConfig).toEqual({
+        model: 'claude-server',
+        source: 'server-default',
+      });
+    });
+
+    it('should replace a deployment API binding when switching to a user provider', async () => {
+      const agent = await agentModel.create({
+        agencyConfig: {
+          heterogeneousProvider: {
+            apiConfig: {
+              model: 'claude-server',
+              source: 'server-default',
+            },
+            authMode: 'api',
+            type: 'claude-code',
+          },
+        },
+      });
+
+      await agentModel.updateConfig(agent.id, {
+        agencyConfig: {
+          heterogeneousProvider: {
+            apiConfig: {
+              model: 'claude-primary',
+              providerId: 'anthropic',
+            },
+          },
+        },
+      });
+
+      const result = await serverDB.query.agents.findFirst({ where: eq(agents.id, agent.id) });
+
+      expect(result?.agencyConfig?.heterogeneousProvider?.apiConfig).toEqual({
+        model: 'claude-primary',
+        providerId: 'anthropic',
       });
     });
 
@@ -1466,6 +1589,7 @@ describe('AgentModel', () => {
       expect(workspaceAgent.agencyConfig).toEqual({
         executionTargetSelectionPolicy: 'member',
         modelSelectionPolicy: 'member',
+        topicSharePolicy: 'member',
       });
       expect(personalAgent.agencyConfig).toBeNull();
     });
@@ -1680,6 +1804,7 @@ describe('AgentModel', () => {
         executionTarget: 'none',
         executionTargetSelectionPolicy: 'fixed',
         modelSelectionPolicy: 'member',
+        topicSharePolicy: 'member',
       });
     });
 
@@ -1911,6 +2036,7 @@ describe('AgentModel', () => {
         expect(result?.agencyConfig).toEqual({
           executionTargetSelectionPolicy: 'member',
           modelSelectionPolicy: 'member',
+          topicSharePolicy: 'member',
         });
       });
 
@@ -3145,6 +3271,36 @@ describe('AgentModel', () => {
       expect(ids).toContain('inbox-agent');
       expect(ids).toContain('normal-agent');
       expect(ids).not.toContain('virtual-agent');
+    });
+
+    // Share-visitor topics live under the creator's userId with a non-null
+    // senderId; they reflect the visitor's usage, not the creator's, so they
+    // must neither inflate a count nor reorder the ranking.
+    it('should not count share-visitor topics', async () => {
+      await serverDB.insert(agents).values([
+        { id: 'shared', title: 'Shared', userId },
+        { id: 'own', title: 'Own', userId },
+        { id: 'visitor-only', title: 'Visitor only', userId },
+      ]);
+      await serverDB.insert(topics).values([
+        // `shared`: one creator topic + three visitor topics → count 1
+        { agentId: 'shared', id: 'sv0', userId },
+        { agentId: 'shared', id: 'sv1', senderId: userId2, userId },
+        { agentId: 'shared', id: 'sv2', senderId: userId2, userId },
+        { agentId: 'shared', id: 'sv3', senderId: userId2, userId },
+        // `own`: two creator topics → count 2, ranks above `shared`
+        { agentId: 'own', id: 'ov1', userId },
+        { agentId: 'own', id: 'ov2', userId },
+        // `visitor-only`: visitor topics only → excluded like a topicless agent
+        { agentId: 'visitor-only', id: 'vo1', senderId: userId2, userId },
+      ]);
+
+      const result = await agentModel.rank();
+
+      expect(result.map((r) => ({ count: r.count, id: r.id }))).toEqual([
+        { count: 2, id: 'own' },
+        { count: 1, id: 'shared' },
+      ]);
     });
 
     it('should only rank the current user agents', async () => {

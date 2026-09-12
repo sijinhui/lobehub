@@ -1,23 +1,31 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { zstdDecompress } from 'node:zlib';
+import zlib from 'node:zlib';
 
 import type { ExecutionSnapshot } from '../types';
+
+/**
+ * `zlib.zstdDecompress` only exists from Node 22.15. Resolved lazily rather
+ * than promisified at module scope so that importing this file — which the
+ * `lh` command tree does at startup — cannot crash the whole CLI on an older
+ * runtime, and so the failure names the actual requirement.
+ */
+const decompressZstd = async (buf: Buffer): Promise<Buffer> => {
+  if (typeof zlib.zstdDecompress !== 'function') {
+    throw new Error(
+      'Reading a compressed trace snapshot requires Node >= 22.15 (node:zlib zstd support). ' +
+        `Current runtime: ${process.version}.`,
+    );
+  }
+  return promisify(zlib.zstdDecompress)(buf);
+};
 
 const REMOTE_DIR = '_remote';
 const ENV_FILE = '.env';
 const DEFAULT_DIR = '.agent-tracing';
 const ZSTD_SUFFIX = '.json.zst';
 const LEGACY_SUFFIX = '.json';
-
-function getZstdDecompress() {
-  if (typeof zstdDecompress !== 'function') {
-    throw new Error('zstd decompression requires a Node.js runtime with node:zlib zstd support.');
-  }
-
-  return promisify(zstdDecompress);
-}
 
 // Zstd frame magic number — first 4 bytes of any zstd-compressed stream.
 // https://datatracker.ietf.org/doc/html/rfc8478#section-3.1.1
@@ -145,7 +153,7 @@ export class RemoteSnapshotStore {
     // Sniff the zstd frame magic so the body is decoded by content, not URL
     // suffix — keeps legacy `.json` snapshots working alongside compressed ones.
     const body = Buffer.from(await res.arrayBuffer());
-    const decoded = isZstdFrame(body) ? await getZstdDecompress()(body) : body;
+    const decoded = isZstdFrame(body) ? await decompressZstd(body) : body;
     const snapshot = JSON.parse(decoded.toString('utf8')) as ExecutionSnapshot;
 
     // Cache locally as plain JSON for easy inspection.

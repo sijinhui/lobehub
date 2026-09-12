@@ -67,6 +67,7 @@ COPY packages ./packages
 COPY patches ./patches
 # workspace manifests must exist before pnpm i so --filter can resolve them
 COPY apps/desktop/src/main/package.json ./apps/desktop/src/main/package.json
+COPY apps/share/package.json ./apps/share/package.json
 COPY apps/workbench/package.json ./apps/workbench/package.json
 
 RUN set -e && \
@@ -108,6 +109,7 @@ COPY --from=builder /app/.next/standalone /app/
 COPY --from=builder /app/.next/static /app/.next/static
 # Copy SPA assets (Vite build output)
 COPY --from=builder /app/public/_spa /app/public/_spa
+COPY --from=builder /app/public/_spa-share /app/public/_spa-share
 COPY --from=builder /app/public/_spa-workbench /app/public/_spa-workbench
 # Copy database migrations
 COPY --from=builder /app/packages/database/migrations /app/migrations
@@ -167,6 +169,7 @@ ENV KEY_VAULTS_SECRET="" \
 ENV AUTH_SECRET="" \
     AUTH_SSO_PROVIDERS="" \
     AUTH_ALLOWED_EMAILS="" \
+    AUTH_ADDITIONAL_TRUSTED_ORIGINS="" \
     AUTH_TRUSTED_ORIGINS="" \
     AUTH_DISABLE_EMAIL_PASSWORD="" \
     AUTH_EMAIL_VERIFICATION="" \
@@ -296,6 +299,8 @@ ENV \
     QWEN_API_KEY="" QWEN_MODEL_LIST="" QWEN_PROXY_URL="" \
     # SambaNova
     SAMBANOVA_API_KEY="" SAMBANOVA_MODEL_LIST="" \
+    # Meta
+    META_API_KEY="" META_MODEL_LIST="" META_PROXY_URL="" \
     # Search1API
     SEARCH1API_API_KEY="" SEARCH1API_MODEL_LIST="" \
     # SenseNova
@@ -310,6 +315,8 @@ ENV \
     TAICHU_API_KEY="" TAICHU_MODEL_LIST="" \
     # TogetherAI
     TOGETHERAI_API_KEY="" TOGETHERAI_MODEL_LIST="" \
+    # Unsloth
+    UNSLOTH_API_KEY="" UNSLOTH_MODEL_LIST="" UNSLOTH_PROXY_URL="" \
     # Upstage
     UPSTAGE_API_KEY="" UPSTAGE_MODEL_LIST="" \
     # v0 (Vercel)
