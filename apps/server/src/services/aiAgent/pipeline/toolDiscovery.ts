@@ -21,12 +21,16 @@ import type {
 import type { LobeChatDatabase } from '@lobechat/database';
 import type { DeviceUnavailableErrorData } from '@lobechat/device-gateway-client';
 import type { ChatTopicBotContext, RequestTrigger } from '@lobechat/types';
-import { getActivePluginIds } from '@lobechat/types';
+import {
+  agentShareFileAccessScope,
+  getActivePluginIds,
+  ordinaryFileAccessScope,
+} from '@lobechat/types';
 import { TRPCError } from '@trpc/server';
 import debug from 'debug';
 import type { ModelAbilities } from 'model-bank';
 
-import type { loadModels } from '@/business/client/model-bank/loadModels';
+import { loadModels } from '@/business/client/model-bank/loadModels';
 import { AiModelModel } from '@/database/models/aiModel';
 import { AiProviderModel } from '@/database/models/aiProvider';
 import { ChatGroupModel } from '@/database/models/chatGroup';
@@ -85,6 +89,7 @@ import {
 import { resolveServerSearchDecision } from '../searchDecision';
 import { filterPluginsByShareGate, shareGateGrantsCloudSandbox } from '../shareGate';
 import type { ExecRunContext, InternalExecAgentParams } from '../types';
+import { markDegradedStage, traceDiscoveryStage } from './discoveryTracing';
 
 const log = debug('lobe-server:ai-agent-service');
 
@@ -135,6 +140,11 @@ export interface ToolDiscoveryResult {
   builtinModels: Awaited<ReturnType<typeof loadModels>>;
   composioManifests: LobeToolManifest[];
   connectorManifests: ReturnType<typeof buildConnectorManifests>;
+  /**
+   * Tells the model whose connected account each borrowed tool runs on. Run
+   * context: it travels on the operation and the context engine injects it.
+   */
+  connectorOwnershipNote?: string;
   executionPlan?: ExecutionPlan;
   hasAgentDocuments: boolean;
   hasEnabledKnowledgeBases: boolean;
@@ -164,14 +174,16 @@ export interface ToolDiscoveryResult {
  * Short-circuits when `disableTools` is set (only the client function tools
  * are honored), matching the pre-extraction behavior.
  *
- * Side effect: appends to `ctx.agentConfig.systemRole` (connector credential
- * ownership note) — `createOperation` downstream must see that write.
+ * Returns the connector credential ownership note as run context when the run
+ * borrows connectors other members authorized; the context engine injects it.
  */
 export const discoverTools = async (
   deps: ToolDiscoveryDeps,
   ctx: ExecRunContext,
   input: ToolDiscoveryInput,
 ): Promise<ToolDiscoveryResult> => {
+  /** Filled below when the run borrows connectors; returned as run context. */
+  let connectorOwnershipNote: string | undefined;
   const {
     agentConfig,
     appContext,
@@ -269,12 +281,25 @@ export const discoverTools = async (
   }
 
   // Model metadata is needed both for tool support checks and agent-management context.
-  const { loadModels } = await import('@/business/client/model-bank/loadModels');
   const builtinModels = await loadModels();
-  const [modelMetadataResult, providerMetadataResult] = await Promise.allSettled([
-    new AiModelModel(deps.db, deps.userId, deps.workspaceId).findByIdAndProvider(model, provider),
-    new AiProviderModel(deps.db, deps.userId, deps.workspaceId).findById(provider),
-  ]);
+  const [modelMetadataResult, providerMetadataResult] = await traceDiscoveryStage(
+    'model_metadata',
+    async (span) => {
+      const results = await Promise.allSettled([
+        new AiModelModel(deps.db, deps.userId, deps.workspaceId).findByIdAndProvider(
+          model,
+          provider,
+        ),
+        new AiProviderModel(deps.db, deps.userId, deps.workspaceId).findById(provider),
+      ]);
+      markDegradedStage(
+        span,
+        results.filter((result) => result.status === 'rejected').length,
+        'metadata lookups',
+      );
+      return results;
+    },
+  );
   if (modelMetadataResult.status === 'rejected') {
     log('execAgent: failed to load active model search metadata: %O', modelMetadataResult.reason);
   }
@@ -359,9 +384,9 @@ export const discoverTools = async (
         );
         const note = buildConnectorOwnershipPrompt(borrowed, displayMap);
         if (note) {
-          agentConfig.systemRole = agentConfig.systemRole
-            ? `${agentConfig.systemRole}\n\n${note}`
-            : note;
+          // Returned as run context for the context engine to inject, rather
+          // than concatenated onto the agent's systemRole here.
+          connectorOwnershipNote = note;
           log(
             'execAgent: injected tool credential ownership note for %d connector(s)',
             borrowed.length,
@@ -435,7 +460,20 @@ export const discoverTools = async (
     // 5c. Fetch LobeHub Skills manifests
     try {
       const marketService = await deps.getMarketService();
-      lobehubSkillManifests = await marketService.getLobehubSkillManifests();
+      lobehubSkillManifests = await traceDiscoveryStage('lobehub_skills', async (span) => {
+        // The service degrades to fewer (or zero) manifests instead of
+        // throwing, so count what it absorbed — otherwise a Market timeout
+        // looks exactly like a user with no connected skills.
+        let failureCount = 0;
+        const manifests = await marketService.getLobehubSkillManifests({
+          onError: () => {
+            failureCount += 1;
+          },
+        });
+        span.setAttribute('lobehub.tool_discovery.manifest_count', manifests.length);
+        markDegradedStage(span, failureCount, 'skill discovery requests');
+        return manifests;
+      });
     } catch (error) {
       log('execAgent: failed to fetch lobehub skill manifests: %O', error);
     }
@@ -443,7 +481,9 @@ export const discoverTools = async (
 
     // 5d. Fetch Composio tool manifests from database
     try {
-      composioManifests = await deps.composioService.getComposioManifests(resolvedAgentId);
+      composioManifests = await traceDiscoveryStage('composio', () =>
+        deps.composioService.getComposioManifests(resolvedAgentId),
+      );
     } catch (error) {
       log('execAgent: failed to fetch composio manifests: %O', error);
     }
@@ -544,7 +584,9 @@ export const discoverTools = async (
         // downstream `onlineDeviceIds` / `deviceOnline` treat this list as the
         // online set.
         onlineDevices = (
-          await getScopedOnlineDevices(deps.db, deps.userId, deps.workspaceId)
+          await traceDiscoveryStage('online_devices', () =>
+            getScopedOnlineDevices(deps.db, deps.userId, deps.workspaceId),
+          )
         ).filter((d) => d.online);
         // A workspace agent whose caller pinned this desktop's personal
         // deviceId via `users.preference.agentDeviceOverrides` (
@@ -594,7 +636,11 @@ export const discoverTools = async (
     let attachedFileTypes: string[] = [];
     if (attachedFileIds && attachedFileIds.length > 0) {
       const fileModel = new FileModel(deps.db, deps.userId, deps.workspaceId);
-      const fileRecords = await fileModel.findByIds(Array.from(new Set(attachedFileIds)));
+      const uniqueFileIds = Array.from(new Set(attachedFileIds));
+      const fileRecords = await fileModel.findByIds(
+        uniqueFileIds,
+        shareGate ? agentShareFileAccessScope(shareGate) : ordinaryFileAccessScope,
+      );
       attachedFileTypes = fileRecords.map((file) => file.fileType || '');
     }
     const inputFileTypes = [...externalFileTypes, ...attachedFileTypes];
@@ -655,7 +701,7 @@ export const discoverTools = async (
     // never route to a device, offline bindings stay unrouted, unbound runs
     // auto-activate only with exactly one device online). Without the
     // `canUseDevice` gate an external bot sender's turn would still populate
-    // `state.metadata.activeDeviceId`, and `buildStepToolDelta` re-injects
+    // `state.binding.device.id`, and `buildStepToolDelta` re-injects
     // `LocalSystemManifest` whenever activeDeviceId is set, bypassing the
     // engine's enabledToolIds exclusion — resolving the plan here closes
     // that bypass at the source.
@@ -766,16 +812,18 @@ export const discoverTools = async (
 
     // Opt-in capability from the existing system-info RPC. Older desktop and CLI
     // clients omit it, so they must never receive the new Computer Use manifest.
-    const supportedDeviceTools =
-      activeDeviceId && canUseDevice && !disableLocalSystem
-        ? (
-            await deviceGateway.queryDeviceSystemInfo(
+    const systemInfoDeviceId = canUseDevice && !disableLocalSystem ? activeDeviceId : undefined;
+    const supportedDeviceTools = systemInfoDeviceId
+      ? (
+          await traceDiscoveryStage('device_system_info', () =>
+            deviceGateway.queryDeviceSystemInfo(
               deps.userId,
-              activeDeviceId,
+              systemInfoDeviceId,
               activeDeviceScope === 'workspace' ? deps.workspaceId : undefined,
-            )
-          )?.supportedTools
-        : undefined;
+            ),
+          )
+        )?.supportedTools
+      : undefined;
 
     // Resolve the operation's group context ONCE here and snapshot it into op
     // metadata below — the per-step context engine reads it back without a DB
@@ -1176,6 +1224,7 @@ export const discoverTools = async (
     builtinModels,
     composioManifests,
     connectorManifests,
+    connectorOwnershipNote,
     executionPlan,
     hasAgentDocuments,
     hasEnabledKnowledgeBases,

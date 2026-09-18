@@ -117,11 +117,12 @@ const globalStore = vi.hoisted(() => ({
 
 vi.mock('motion/react', () => ({
   AnimatePresence: ({ children }: { children?: ReactNode }) => <>{children}</>,
-  m: {
-    div: ({ children, ...props }: { children?: ReactNode; [key: string]: unknown }) => (
-      <div {...props}>{children}</div>
-    ),
-  },
+}));
+
+vi.mock('motion/react-m', () => ({
+  div: ({ children, ...props }: { children?: ReactNode; [key: string]: unknown }) => (
+    <div {...props}>{children}</div>
+  ),
 }));
 
 vi.mock('@/features/RightPanel', () => ({
@@ -241,8 +242,8 @@ vi.mock('@/features/ChatInput/ControlBar/useRepoType', async () => {
 vi.mock('@/hooks/useEffectiveWorkingDirectory', () => ({
   useEffectiveWorkingDirectory: () => reviewState.workingDirectory,
 }));
-vi.mock('@/hooks/useTopicAgencyConfig', () => ({
-  useTopicAgencyConfig: () => ({
+vi.mock('@/hooks/useEffectiveAgencyConfig', () => ({
+  useEffectiveAgencyConfig: () => ({
     agencyConfig: effectiveConfig.agencyConfig,
     workspaceScoped: effectiveConfig.workspaceScoped,
   }),

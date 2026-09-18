@@ -23,7 +23,8 @@ import {
   SquareTerminalIcon,
   XIcon,
 } from 'lucide-react';
-import { AnimatePresence, m } from 'motion/react';
+import { AnimatePresence } from 'motion/react';
+import * as m from 'motion/react-m';
 import {
   Activity,
   lazy,
@@ -52,9 +53,9 @@ import { resolveExecutionTarget } from '@/helpers/executionTarget';
 import { useIsGatewayModeEnabled } from '@/helpers/gatewayMode';
 import { getWorkingDirectoryPathString } from '@/helpers/workingDirectoryPath';
 import { useDeferredMount } from '@/hooks/useDeferredMount';
+import { useEffectiveAgencyConfig } from '@/hooks/useEffectiveAgencyConfig';
 import { useEffectiveWorkingDirectory } from '@/hooks/useEffectiveWorkingDirectory';
 import { useLocalStorageState } from '@/hooks/useLocalStorageState';
-import { useTopicAgencyConfig } from '@/hooks/useTopicAgencyConfig';
 import type { NativeContextMenuItem } from '@/libs/contextMenu/types';
 import { useAgentStore } from '@/store/agent';
 import { agentSelectors, chatConfigByIdSelectors } from '@/store/agent/selectors';
@@ -312,7 +313,7 @@ const AgentWorkingSidebar = memo<AgentWorkingSidebarProps>(({ availableWidth }) 
   const workingDirectory = useEffectiveWorkingDirectory(activeAgentId);
   // Effective target device for git ops — bound device for remote agents, this
   // machine otherwise. Resolved the same way WorkingDirectoryPicker / GitStatus do.
-  const { agencyConfig, workspaceScoped } = useTopicAgencyConfig(activeAgentId);
+  const { agencyConfig, workspaceScoped } = useEffectiveAgencyConfig(activeAgentId);
   const currentDeviceId = useElectronStore((s) => s.gatewayDeviceInfo?.deviceId);
   const targetDeviceId = resolveTargetDeviceId(agencyConfig, currentDeviceId, {
     workspaceScoped,
