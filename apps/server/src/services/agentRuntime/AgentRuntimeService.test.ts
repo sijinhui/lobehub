@@ -2,6 +2,7 @@
  * @vitest-environment node
  */
 import { getModelPropertyWithFallback } from '@lobechat/model-runtime';
+import type { UIChatMessage } from '@lobechat/types';
 import type * as ModelBankModule from 'model-bank';
 import type { MockInstance } from 'vitest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -42,6 +43,15 @@ vi.mock('@/libs/trusted-client', () => ({
 }));
 
 // Mock database and models
+vi.mock('@/server/services/file', () => ({
+  FileService: vi.fn().mockImplementation(function () {
+    return {
+      getFullFileUrl: vi.fn(async (path: string) => `model:${path}`),
+      getFileAccessUrl: vi.fn(async (file: { id: string }) => `ui:${file.id}`),
+    };
+  }),
+}));
+
 vi.mock('@/database/models/message', () => ({
   MessageModel: vi.fn().mockImplementation(function () {
     return {
@@ -181,7 +191,7 @@ describe('AgentRuntimeService', () => {
   const buildPersistedToolChain = (
     finalContent: string,
     finalMetadata?: Record<string, unknown>,
-  ) => [
+  ): UIChatMessage[] => [
     {
       content: 'question',
       createdAt: 1,
@@ -410,6 +420,63 @@ describe('AgentRuntimeService', () => {
     });
   });
 
+  describe('determineCompletionReason', () => {
+    const reasonFor = (state: Record<string, any>) =>
+      (service as any).determineCompletionReason(state);
+
+    it('should report a plain completion as done', () => {
+      expect(reasonFor({ status: 'done', stepCount: 3 })).toBe('done');
+    });
+
+    // The guard finalizes the turn without tool calls, which is indistinguishable
+    // from a real answer by status alone — so these runs were all filed as 'done'
+    // and could not be counted.
+    it('should name a run the tool-call repeat guard cut short', () => {
+      expect(
+        reasonFor({
+          status: 'done',
+          stepCount: 250,
+          toolCallRepeatGuard: { counts: {}, stoppedByRepeatLimit: true },
+        }),
+      ).toBe('tool_call_repeat_limit');
+    });
+
+    it('should let a real failure outrank the repeat-guard marker', () => {
+      expect(
+        reasonFor({
+          status: 'error',
+          stepCount: 250,
+          toolCallRepeatGuard: { counts: {}, stoppedByRepeatLimit: true },
+        }),
+      ).toBe('error');
+      expect(
+        reasonFor({
+          status: 'interrupted',
+          stepCount: 250,
+          toolCallRepeatGuard: { counts: {}, stoppedByRepeatLimit: true },
+        }),
+      ).toBe('interrupted');
+    });
+
+    it('should ignore a guard that counted repeats without ever stopping', () => {
+      expect(
+        reasonFor({ status: 'done', stepCount: 3, toolCallRepeatGuard: { counts: { sig: 4 } } }),
+      ).toBe('done');
+    });
+
+    it('should still report the step and cost caps', () => {
+      expect(reasonFor({ status: 'running', maxSteps: 10, stepCount: 10 })).toBe('max_steps');
+      expect(
+        reasonFor({
+          status: 'running',
+          stepCount: 3,
+          cost: { total: 5 },
+          costLimit: { maxTotalCost: 5 },
+        }),
+      ).toBe('cost_limit');
+    });
+  });
+
   describe('createOperation', () => {
     const mockParams: OperationCreationParams = {
       operationId: 'test-operation-1',
@@ -431,6 +498,15 @@ describe('AgentRuntimeService', () => {
       initialMessages: [],
     };
 
+    it.each([undefined, false, true])(
+      'persists the snapshot opt-in for resumed steps (%s)',
+      async (includeFinalState) => {
+        await service.createOperation({ ...mockParams, autoStart: false, includeFinalState });
+        const savedState = mockCoordinator.saveAgentState.mock.calls[0][1];
+        expect(savedState.host.includeFinalState === true).toBe(includeFinalState === true);
+      },
+    );
+
     it('should create operation successfully with autoStart=true', async () => {
       mockQueueService.scheduleMessage.mockResolvedValueOnce('message-123');
 
@@ -451,8 +527,8 @@ describe('AgentRuntimeService', () => {
           stepCount: 0,
           messages: [],
           modelRuntimeConfig: mockParams.modelRuntimeConfig,
+          operationToolSet: expect.objectContaining({ manifestMap: {} }),
           origin: expect.objectContaining({ userId: mockParams.userId }),
-          toolManifestMap: {},
           world: expect.objectContaining({ agent: mockParams.agentConfig }),
         }),
       );
@@ -471,6 +547,136 @@ describe('AgentRuntimeService', () => {
         priority: 'high',
         delay: 50,
       });
+    });
+
+    it('freezes the builder editing target on the run origin', async () => {
+      await service.createOperation({
+        ...mockParams,
+        appContext: {
+          editingAgentId: 'agt_target',
+          editingGroupId: 'grp_target',
+          scope: 'agent_builder',
+        },
+      });
+
+      const [, state] = mockCoordinator.saveAgentState.mock.calls[0];
+      expect(state.origin).toMatchObject({
+        editingAgentId: 'agt_target',
+        editingGroupId: 'grp_target',
+      });
+    });
+
+    it('records the approval mode as a run policy', async () => {
+      await service.createOperation({
+        ...mockParams,
+        userInterventionConfig: { approvalMode: 'headless' },
+      });
+
+      const [, state] = mockCoordinator.saveAgentState.mock.calls[0];
+      expect(state.principal.policy.userIntervention).toEqual({ approvalMode: 'headless' });
+      // Mirrored at the top level for the rolling-deploy window: a worker on the
+      // pre-slot build reads only that, and would park this headless run.
+      expect(state.userInterventionConfig).toEqual({ approvalMode: 'headless' });
+    });
+
+    it('stores the run tool set once, on the operation slot', async () => {
+      const manifestMap = { 'lobe-web-browsing': { identifier: 'lobe-web-browsing' } };
+
+      await service.createOperation({
+        ...mockParams,
+        toolSet: {
+          enabledToolIds: ['lobe-web-browsing'],
+          executorMap: {},
+          manifestMap,
+          sourceMap: { 'lobe-web-browsing': 'builtin' },
+          tools: [{ function: { name: 'search' }, type: 'function' }],
+        } as unknown as OperationCreationParams['toolSet'],
+      });
+
+      const [, state] = mockCoordinator.saveAgentState.mock.calls[0];
+      expect(state.operationToolSet.manifestMap).toEqual(manifestMap);
+      // Manifests are the heaviest thing on the state and it is re-serialized at
+      // every step, so the legacy top-level mirrors are not written any more.
+      for (const mirror of ['toolExecutorMap', 'toolManifestMap', 'toolSourceMap', 'tools']) {
+        expect(mirror in state).toBe(false);
+      }
+    });
+
+    it('keeps the frozen model facts on the run state but out of durable storage', async () => {
+      const recordStart = vi
+        .spyOn(AgentOperationModel.prototype, 'recordStart')
+        .mockResolvedValue(undefined);
+      const modelFacts = {
+        cards: [{ abilities: { vision: true }, id: 'gpt-4', providerId: 'openai' }],
+        model: 'gpt-4',
+        provider: 'openai',
+      };
+
+      await service.createOperation({
+        ...mockParams,
+        modelRuntimeConfig: { ...mockParams.modelRuntimeConfig, modelFacts },
+      });
+
+      // The steps read the snapshot back off the state.
+      expect(mockCoordinator.saveAgentState).toHaveBeenCalledWith(
+        'test-operation-1',
+        expect.objectContaining({
+          modelRuntimeConfig: expect.objectContaining({ modelFacts }),
+        }),
+      );
+      // The row that outlives the run, and the metadata copy, stay as small as
+      // they were: both only ever surface model / provider.
+      expect(recordStart.mock.calls[0][0].modelRuntimeConfig).toEqual({ model: 'gpt-4' });
+      expect(mockCoordinator.createAgentOperation).toHaveBeenCalledWith(
+        'test-operation-1',
+        expect.objectContaining({ modelRuntimeConfig: { model: 'gpt-4' } }),
+      );
+    });
+
+    it('waits for dependent records before dispatch without losing the prepared context', async () => {
+      let release!: () => void;
+      const prepared = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const onOperationCreated = vi.fn<(operationId: string) => Promise<void>>(
+        async () => prepared,
+      );
+      const initialContext = {
+        ...mockParams.initialContext,
+        payload: {
+          assistantMessageId: 'repair-assistant',
+          parentMessageId: 'verify-card',
+        },
+      } as OperationCreationParams['initialContext'];
+      const creation = service.createOperation({
+        ...mockParams,
+        initialContext,
+        onOperationCreated,
+      });
+      try {
+        await vi.waitFor(() =>
+          expect(onOperationCreated).toHaveBeenCalledWith(mockParams.operationId),
+        );
+        expect(mockQueueService.scheduleMessage).not.toHaveBeenCalled();
+      } finally {
+        release();
+      }
+      await creation;
+      expect(mockQueueService.scheduleMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ context: initialContext }),
+      );
+    });
+
+    it('does not dispatch when dependent record preparation fails', async () => {
+      await expect(
+        service.createOperation({
+          ...mockParams,
+          onOperationCreated: async () => {
+            throw new Error('Plan unavailable');
+          },
+        }),
+      ).rejects.toThrow('Plan unavailable');
+      expect(mockQueueService.scheduleMessage).not.toHaveBeenCalled();
     });
 
     it('should create operation successfully with autoStart=false', async () => {
@@ -558,11 +764,14 @@ describe('AgentRuntimeService', () => {
         expertise,
       });
 
+      // What the model is told about the run lives on the world slot, with the
+      // top-level mirror kept for pre-slot workers during a rolling deploy.
       expect(mockCoordinator.saveAgentState).toHaveBeenCalledWith(
         'test-operation-1',
         expect.objectContaining({
           enableExpertise: true,
           expertise,
+          world: expect.objectContaining({ enableExpertise: true, expertise }),
         }),
       );
     });
@@ -806,6 +1015,209 @@ describe('AgentRuntimeService', () => {
       );
     });
 
+    it.each([false, true])(
+      'reuses the entry read for device discovery (device=%s)',
+      async (withDevice) => {
+        const state = {
+          ...mockState,
+          messages: [],
+          origin: { agentId: 'agent-1', topicId: 'topic-1' },
+        };
+        mockCoordinator.loadAgentState.mockResolvedValue(state);
+        const dbMessages = buildPersistedToolChain('full model answer');
+        dbMessages[0].imageList = [{ id: 'file-1', url: 'raw/image', alt: 'image' }];
+        if (withDevice) {
+          dbMessages[0] = {
+            ...dbMessages[0],
+            role: 'tool',
+            pluginState: { metadata: { activeDeviceId: 'device-1', devicePlatform: 'darwin' } },
+          };
+        }
+        const query = (service as any).messageModel.query.mockResolvedValue(dbMessages);
+        vi.spyOn((service as any).messageService, 'prepareUiMessages').mockResolvedValue([]);
+        const step = vi.fn().mockImplementation(async (input) => ({
+          events: [],
+          newState: { ...input, stepCount: 2 },
+          nextContext: mockParams.context,
+        }));
+        vi.spyOn(service as any, 'createAgentRuntime').mockResolvedValue({ runtime: { step } });
+
+        const result = await service.executeStep(mockParams);
+
+        expect(result.success).toBe(true);
+        expect(query).toHaveBeenCalledTimes(1);
+        expect(JSON.stringify(step.mock.calls[0][0].messages)).toContain('full model answer');
+        expect(JSON.stringify(step.mock.calls[0][0].messages)).toContain('model:raw/image');
+        expect(dbMessages[0].imageList?.[0].url).toBe('raw/image');
+        expect(step.mock.calls[0][0].binding?.device?.id).toBe(withDevice ? 'device-1' : undefined);
+      },
+    );
+
+    // The executors read the device id through the same gate, so binding one for
+    // a run that may not touch a device buys nothing — and its working directory
+    // and system info would ride into the prompt variables.
+    it.each([
+      { policy: { deviceAccess: { canUseDevice: false, reason: 'external-bot' } }, why: 'policy' },
+      { plan: { execution: { kind: 'sandbox', target: 'sandbox' } }, why: 'plan' },
+    ])('does not adopt a device the run may not use ($why)', async ({ plan, policy }) => {
+      const state = {
+        ...mockState,
+        messages: [],
+        origin: { agentId: 'agent-1', topicId: 'topic-1' },
+        ...(plan && { plan }),
+        ...(policy && { principal: { policy } }),
+      };
+      mockCoordinator.loadAgentState.mockResolvedValue(state);
+      const dbMessages = buildPersistedToolChain('answer');
+      dbMessages[0] = {
+        ...dbMessages[0],
+        pluginState: {
+          metadata: {
+            activeDeviceId: 'device-1',
+            devicePlatform: 'darwin',
+            deviceSystemInfo: { workingDirectory: '/Users/someone/secret' },
+          },
+        },
+        role: 'tool',
+      };
+      (service as any).messageModel.query.mockResolvedValue(dbMessages);
+      vi.spyOn((service as any).messageService, 'prepareUiMessages').mockResolvedValue([]);
+      const step = vi.fn().mockImplementation(async (input) => ({
+        events: [],
+        newState: { ...input, stepCount: 2 },
+        nextContext: mockParams.context,
+      }));
+      vi.spyOn(service as any, 'createAgentRuntime').mockResolvedValue({ runtime: { step } });
+
+      const result = await service.executeStep(mockParams);
+
+      expect(result.success).toBe(true);
+      expect(step.mock.calls[0][0].binding?.device).toBeUndefined();
+    });
+
+    describe('activateDevice after a device is already bound', () => {
+      const activation = (id: string, deviceId: string): UIChatMessage =>
+        ({
+          content: `Device "${deviceId}" activated successfully.`,
+          createdAt: 3,
+          id,
+          pluginState: { metadata: { activeDeviceId: deviceId } },
+          role: 'tool',
+          updatedAt: 3,
+        }) as UIChatMessage;
+
+      const runStep = async (execution: Record<string, unknown>) => {
+        const state = {
+          ...mockState,
+          binding: { device: { id: 'device-a' } },
+          messages: [],
+          origin: { agentId: 'agent-1', topicId: 'topic-1' },
+          plan: { execution },
+        };
+        mockCoordinator.loadAgentState.mockResolvedValue(state);
+        // The model activated device-a first, then device-b.
+        (service as any).messageModel.query.mockResolvedValue([
+          ...buildPersistedToolChain('answer'),
+          activation('activate-a', 'device-a'),
+          activation('activate-b', 'device-b'),
+        ]);
+        vi.spyOn((service as any).messageService, 'prepareUiMessages').mockResolvedValue([]);
+        const step = vi.fn().mockImplementation(async (input) => ({
+          events: [],
+          newState: { ...input, stepCount: 2 },
+          nextContext: mockParams.context,
+        }));
+        vi.spyOn(service as any, 'createAgentRuntime').mockResolvedValue({ runtime: { step } });
+
+        const result = await service.executeStep(mockParams);
+        expect(result.success).toBe(true);
+        return step.mock.calls[0][0].binding?.device?.id;
+      };
+
+      it('follows the latest activation while the plan leaves the device open', async () => {
+        const deviceId = await runStep({
+          kind: 'device-unrouted',
+          reason: 'ambiguous-online-devices',
+          target: 'auto',
+        });
+
+        expect(deviceId).toBe('device-b');
+      });
+
+      it('keeps a locked run on its device even if history names another one', async () => {
+        const deviceId = await runStep({ deviceId: 'device-a', kind: 'device', target: 'device' });
+
+        expect(deviceId).toBe('device-a');
+      });
+    });
+
+    it('shares one DB read while UI preparation is still pending', async () => {
+      const state = {
+        ...mockState,
+        messages: [],
+        origin: { agentId: 'agent-1', topicId: 'topic-1' },
+      };
+      mockCoordinator.loadAgentState.mockResolvedValue(state);
+      const query = (service as any).messageModel.query.mockResolvedValue([]);
+      let resolveUi!: (messages: []) => void;
+      const uiRead = vi.spyOn((service as any).messageService, 'prepareUiMessages').mockReturnValue(
+        new Promise((resolve) => {
+          resolveUi = resolve;
+        }),
+      );
+      const step = vi.fn().mockResolvedValue({
+        events: [],
+        newState: { ...state, stepCount: 2 },
+        nextContext: mockParams.context,
+      });
+      vi.spyOn(service as any, 'createAgentRuntime').mockResolvedValue({ runtime: { step } });
+      const running = service.executeStep(mockParams);
+      let startedBeforeUiResolved: boolean;
+      try {
+        await vi.waitFor(() => expect(uiRead).toHaveBeenCalled());
+        startedBeforeUiResolved = query.mock.calls.length > 0;
+        expect(step).not.toHaveBeenCalled();
+      } finally {
+        resolveUi([]);
+        await running;
+      }
+      expect(startedBeforeUiResolved).toBe(true);
+      expect(query).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps ephemeral input while preparing the persisted UI snapshot', async () => {
+      const messages = [{ role: 'user', content: 'transient prompt' }];
+      const state = { ...mockState, messages, origin: { agentId: 'agent', topicId: 'topic' } };
+      (service as any).messageModel.query.mockResolvedValue(
+        buildPersistedToolChain('stored answer'),
+      );
+      const ui = [{ id: 'ui', role: 'assistant', content: 'UI answer' }];
+      vi.spyOn((service as any).messageService, 'prepareUiMessages').mockResolvedValue(ui);
+
+      const result = await (service as any).queryStepEntryMessages(state);
+
+      expect(state.messages).toBe(messages);
+      expect(result.uiMessages).toEqual(ui);
+      expect(result.messages).toHaveLength(4);
+    });
+
+    it('hydrates the model even when UI preparation fails', async () => {
+      const state = { ...mockState, messages: [], origin: { agentId: 'agent', topicId: 'topic' } };
+      (service as any).messageModel.query.mockResolvedValue(
+        buildPersistedToolChain('stored answer'),
+      );
+      vi.spyOn((service as any).messageService, 'prepareUiMessages').mockRejectedValue(
+        new Error('UI failed'),
+      );
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const result = await (service as any).queryStepEntryMessages(state);
+
+      expect(JSON.stringify(state.messages)).toContain('stored answer');
+      expect(result.uiMessages).toBeUndefined();
+      expect(result.messages).toHaveLength(4);
+    });
+
     it('should execute step successfully', async () => {
       const mockStepResult = {
         newState: { ...mockState, stepCount: 2, status: 'running' },
@@ -837,13 +1249,65 @@ describe('AgentRuntimeService', () => {
         stepIndex: 1,
         data: {
           stepIndex: 1,
-          finalState: mockStepResult.newState,
           nextStepScheduled: false, // Published before nextStepScheduled is updated
         },
       });
 
       expect(mockCoordinator.saveStepResult).toHaveBeenCalled();
       expect(mockQueueService.scheduleMessage).toHaveBeenCalled();
+    });
+
+    describe('frozen credential snapshot', () => {
+      const frozen = {
+        credentials: [{ key: 'OPENAI', name: 'OpenAI', type: 'apiKey' }],
+        workspaceId: undefined,
+      };
+
+      /**
+       * Snapshot the state AT the save, not the object afterwards: the runtime
+       * keeps mutating `newState`, so a later clear would otherwise read back as
+       * if it had been persisted.
+       */
+      const runStepWithToolCall = async (apiName: string) => {
+        const stateWithSnapshot = { ...mockState, operationCredentials: frozen };
+        mockCoordinator.loadAgentState.mockResolvedValue(stateWithSnapshot);
+
+        let persisted: string | undefined;
+        mockCoordinator.saveStepResult.mockImplementationOnce(async (_id: string, result: any) => {
+          persisted = JSON.stringify(result.newState);
+        });
+
+        const mockRuntime = {
+          step: vi.fn().mockResolvedValue({
+            events: [],
+            newState: { ...stateWithSnapshot, status: 'running', stepCount: 2 },
+            nextContext: {
+              payload: { toolCall: { apiName, identifier: 'lobe-creds' } },
+              phase: 'tool_result',
+            },
+          }),
+        };
+        vi.spyOn(service as any, 'createAgentRuntime').mockReturnValue({ runtime: mockRuntime });
+
+        await service.executeStep(mockParams);
+
+        expect(persisted).toBeDefined();
+        return JSON.parse(persisted!);
+      };
+
+      it('drops the snapshot in the state it persists after the run saves a credential', async () => {
+        const persistedState = await runStepWithToolCall('saveCreds');
+
+        expect(persistedState.operationCredentials).toBeUndefined();
+      });
+
+      it('keeps the snapshot when the creds call only read', async () => {
+        const persistedState = await runStepWithToolCall('injectCredsToSandbox');
+
+        expect(persistedState.operationCredentials).toEqual({
+          credentials: frozen.credentials,
+        });
+      });
     });
 
     it('should resume async tools with the last pending tool result as parentMessageId', async () => {
@@ -911,6 +1375,61 @@ describe('AgentRuntimeService', () => {
         }),
         expect.objectContaining({
           payload: { parentMessageId: 'tool-msg-2' },
+          phase: 'user_input',
+        }),
+      );
+    });
+
+    // Approving a callSubAgent starts a resume op that seeds its assistant
+    // placeholder, runs the tool, then parks on the deferred sub-agent. The
+    // resumed turn must fill that seed; a second assistant left the seed as an
+    // empty "…" branch that hid the real answer.
+    it('fills the seeded assistant placeholder when resuming from an async tool', async () => {
+      const parkedState = {
+        ...mockState,
+        interruption: {
+          canResume: true,
+          interruptedAt: new Date().toISOString(),
+          reason: 'async_tool',
+        },
+        pendingAssistantMessageId: 'seeded-assistant-1',
+        pendingToolsCalling: [
+          {
+            apiName: 'callSubAgent',
+            arguments: '{}',
+            id: 'tool-call-1',
+            identifier: 'lobe-agent',
+            type: 'builtin',
+          },
+        ],
+        status: 'waiting_for_async_tool',
+      };
+      const refreshedMessages = [
+        { content: 'research', id: 'user-msg-1', role: 'user' },
+        {
+          id: 'assistant-msg-1',
+          role: 'assistant',
+          tools: [{ id: 'tool-call-1', result_msg_id: 'tool-msg-1' }],
+        },
+      ];
+      const mockRuntime = {
+        step: vi.fn().mockResolvedValue({
+          events: [],
+          newState: { ...parkedState, pendingToolsCalling: [], status: 'done', stepCount: 2 },
+          nextContext: null,
+        }),
+      };
+
+      mockCoordinator.loadAgentState.mockResolvedValue(parkedState);
+      vi.spyOn(service as any, 'refreshMessagesFromDB').mockResolvedValue(refreshedMessages);
+      vi.spyOn(service as any, 'createAgentRuntime').mockReturnValue({ runtime: mockRuntime });
+
+      await service.executeStep({ ...mockParams, resumeAsyncTool: true });
+
+      expect(mockRuntime.step).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          payload: { assistantMessageId: 'seeded-assistant-1', parentMessageId: 'tool-msg-1' },
           phase: 'user_input',
         }),
       );
@@ -2008,6 +2527,21 @@ describe('AgentRuntimeService', () => {
   });
 
   describe('interruptOperation', () => {
+    let findOperation: MockInstance<AgentOperationModel['findById']>;
+
+    beforeEach(() => {
+      findOperation = vi.spyOn(AgentOperationModel.prototype, 'findById');
+      mockDb.select.mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
+        }),
+      });
+    });
+
+    afterEach(() => {
+      findOperation.mockRestore();
+    });
+
     it('should interrupt a running operation', async () => {
       mockCoordinator.loadAgentState.mockResolvedValue({
         operationId: 'op-1',
@@ -2051,7 +2585,7 @@ describe('AgentRuntimeService', () => {
       );
     });
 
-    it('should return false when state not found', async () => {
+    it('should return false when state and owned operation are not found', async () => {
       mockCoordinator.loadAgentState.mockResolvedValue(null);
 
       const result = await service.interruptOperation('non-existent');
@@ -2061,7 +2595,7 @@ describe('AgentRuntimeService', () => {
       expect(mockCoordinator.markInterrupted).not.toHaveBeenCalled();
     });
 
-    it('should return false when operation already done', async () => {
+    it('should acknowledge cancellation when operation already done', async () => {
       mockCoordinator.loadAgentState.mockResolvedValue({
         operationId: 'op-done',
         status: 'done',
@@ -2070,11 +2604,11 @@ describe('AgentRuntimeService', () => {
 
       const result = await service.interruptOperation('op-done');
 
-      expect(result).toBe(false);
+      expect(result).toBe(true);
       expect(mockCoordinator.saveAgentState).not.toHaveBeenCalled();
     });
 
-    it('should return false when operation already in error state', async () => {
+    it('should acknowledge cancellation when operation already in error state', async () => {
       mockCoordinator.loadAgentState.mockResolvedValue({
         operationId: 'op-err',
         status: 'error',
@@ -2083,11 +2617,11 @@ describe('AgentRuntimeService', () => {
 
       const result = await service.interruptOperation('op-err');
 
-      expect(result).toBe(false);
+      expect(result).toBe(true);
       expect(mockCoordinator.saveAgentState).not.toHaveBeenCalled();
     });
 
-    it('should return false when operation already interrupted', async () => {
+    it('should acknowledge cancellation when operation already interrupted', async () => {
       mockCoordinator.loadAgentState.mockResolvedValue({
         operationId: 'op-int',
         status: 'interrupted',
@@ -2096,8 +2630,87 @@ describe('AgentRuntimeService', () => {
 
       const result = await service.interruptOperation('op-int');
 
-      expect(result).toBe(false);
+      expect(result).toBe(true);
       expect(mockCoordinator.saveAgentState).not.toHaveBeenCalled();
+    });
+
+    it.each(['done', 'error', 'interrupted', 'abandoned'] as const)(
+      'acknowledges an expired runtime state when the owned operation is %s',
+      async (status) => {
+        mockCoordinator.loadAgentState.mockResolvedValue(null);
+        findOperation.mockResolvedValue({
+          id: 'op-expired',
+          status,
+        } as Awaited<ReturnType<AgentOperationModel['findById']>>);
+        expect(await service.interruptOperation('op-expired')).toBe(true);
+        expect(mockCoordinator.saveAgentState).not.toHaveBeenCalled();
+        expect(mockCoordinator.markInterrupted).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(['idle', 'running', 'waiting_for_human', 'waiting_for_async_tool'] as const)(
+      'does not treat missing runtime state as stopped when the owned operation is %s',
+      async (status) => {
+        mockCoordinator.loadAgentState.mockResolvedValue(null);
+        findOperation.mockResolvedValue({
+          id: 'op-active',
+          status,
+        } as Awaited<ReturnType<AgentOperationModel['findById']>>);
+        expect(await service.interruptOperation('op-active')).toBe(false);
+        expect(mockCoordinator.saveAgentState).not.toHaveBeenCalled();
+        expect(mockCoordinator.markInterrupted).not.toHaveBeenCalled();
+      },
+    );
+
+    describe('running operation whose runtime state is gone', () => {
+      let settleStale: MockInstance<AgentOperationModel['settleStaleRunning']>;
+
+      beforeEach(() => {
+        mockCoordinator.loadAgentState.mockResolvedValue(null);
+        settleStale = vi.spyOn(AgentOperationModel.prototype, 'settleStaleRunning');
+      });
+
+      afterEach(() => {
+        settleStale.mockRestore();
+      });
+
+      it('retires a dead operation so the stop is confirmed', async () => {
+        const updatedAt = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
+        findOperation.mockResolvedValue({
+          id: 'op-dead',
+          status: 'running',
+          updatedAt,
+        } as Awaited<ReturnType<AgentOperationModel['findById']>>);
+        settleStale.mockResolvedValue(true);
+
+        expect(await service.interruptOperation('op-dead')).toBe(true);
+        expect(settleStale).toHaveBeenCalledWith('op-dead', expect.any(Date));
+        const staleBefore = settleStale.mock.calls[0][1];
+        expect(staleBefore.getTime()).toBeGreaterThan(updatedAt.getTime());
+        expect(staleBefore.getTime()).toBeLessThan(Date.now() - 5 * 60 * 1000);
+      });
+
+      it('keeps refusing while the lease is fresh', async () => {
+        findOperation.mockResolvedValue({
+          id: 'op-live',
+          status: 'running',
+          updatedAt: new Date(Date.now() - 60 * 1000),
+        } as Awaited<ReturnType<AgentOperationModel['findById']>>);
+
+        expect(await service.interruptOperation('op-live')).toBe(false);
+        expect(settleStale).not.toHaveBeenCalled();
+      });
+
+      it('keeps refusing when a heartbeat wins the retirement race', async () => {
+        findOperation.mockResolvedValue({
+          id: 'op-race',
+          status: 'running',
+          updatedAt: new Date(Date.now() - 60 * 60 * 1000),
+        } as Awaited<ReturnType<AgentOperationModel['findById']>>);
+        settleStale.mockResolvedValue(false);
+
+        expect(await service.interruptOperation('op-race')).toBe(false);
+      });
     });
   });
 
@@ -2125,21 +2738,31 @@ describe('AgentRuntimeService', () => {
       expect(result).toEqual(stubMessages);
     });
 
-    it('opts the snapshot into agent-share visitor rows', async () => {
-      // Regression: `MessageModel.query()` hides share-visitor messages by
-      // default. A visitor run executes under the creator's identity, so
-      // without the opt-in the terminal snapshot for the visitor's topic is
-      // `[]` and the client replaces the conversation it just streamed with
-      // nothing.
-      const queryMessages = vi.fn().mockResolvedValue([]);
-      stubMessageService(service, queryMessages);
+    it.each([
+      { skipToolProjection: false, visitorUserId: undefined },
+      { skipToolProjection: true, visitorUserId: 'visitor_1' },
+    ])(
+      'includes visitor rows with skipToolProjection=$skipToolProjection',
+      async ({ skipToolProjection, visitorUserId }) => {
+        // Regression: `MessageModel.query()` hides share-visitor messages by
+        // default. A visitor run executes under the creator's identity, so
+        // without the opt-in the terminal snapshot for the visitor's topic is
+        // `[]` and the client replaces the conversation it just streamed with
+        // nothing.
+        const queryMessages = vi.fn().mockResolvedValue([]);
+        stubMessageService(service, queryMessages);
 
-      await service.queryUiMessages({
-        origin: { agentId: 'agt_1', topicId: 'tpc_1' },
-      } as any);
+        await service.queryUiMessages({
+          origin: { agentId: 'agt_1', topicId: 'tpc_1' },
+          principal: visitorUserId ? { actor: { shareVisitor: { visitorUserId } } } : undefined,
+        } as any);
 
-      expect(queryMessages).toHaveBeenCalledWith(expect.anything(), { allowShareVisitor: true });
-    });
+        expect(queryMessages).toHaveBeenCalledWith(expect.anything(), {
+          allowShareVisitor: true,
+          skipToolProjection,
+        });
+      },
+    );
 
     it('scopes the snapshot to the run thread when the operation is a subtopic run', async () => {
       // Regression: without `threadId` the snapshot is the topic's MAIN
@@ -2860,6 +3483,47 @@ describe('AgentRuntimeService', () => {
       );
     });
 
+    it('ends a callSubAgent result with the sub-agent id so the parent can continue it', async () => {
+      (service as any).messageModel.findMessagePlugin = vi
+        .fn()
+        .mockResolvedValue({ apiName: 'callSubAgent', identifier: 'lobe-agent' });
+
+      await service.completeSubAgentBridge({ ...bridgeParams, finalState: childState as any });
+      await service.completeSubAgentBridge({
+        ...bridgeParams,
+        finalState: { ...childState, error: { message: 'Budget exceeded' } } as any,
+        reason: 'error',
+      });
+
+      expect(updateToolMessage).toHaveBeenNthCalledWith(
+        1,
+        'tool-msg-1',
+        expect.objectContaining({ content: 'final answer\n\n<sub_agent id="thread-1" />' }),
+      );
+      expect(updateToolMessage).toHaveBeenNthCalledWith(
+        2,
+        'tool-msg-1',
+        expect.objectContaining({
+          content: expect.stringMatching(
+            /^Sub-agent did not complete \(error\): .*\n\n<sub_agent id="thread-1" \/>$/,
+          ),
+        }),
+      );
+    });
+
+    it('leaves callAgent results without a sub-agent id', async () => {
+      (service as any).messageModel.findMessagePlugin = vi
+        .fn()
+        .mockResolvedValue({ apiName: 'callAgent', identifier: 'lobe-agent-management' });
+
+      await service.completeSubAgentBridge({ ...bridgeParams, finalState: childState as any });
+
+      expect(updateToolMessage).toHaveBeenCalledWith(
+        'tool-msg-1',
+        expect.objectContaining({ content: 'final answer' }),
+      );
+    });
+
     it('loads the child state from the coordinator when finalState is not passed (webhook path)', async () => {
       mockCoordinator.loadAgentState.mockResolvedValue(childState);
 
@@ -3077,6 +3741,103 @@ describe('AgentRuntimeService', () => {
           pluginState: expect.objectContaining({ status: 'error' }),
         }),
       );
+    });
+
+    // A watchdog-abandoned child's reloaded state has no error; the abandon
+    // hand-off passes it explicitly. Without it the parent got a bare "(error).".
+    it('explains a watchdog-abandoned child from the hand-off error message', async () => {
+      await service.completeSubAgentBridge({
+        ...bridgeParams,
+        errorMessage: 'Operation abandoned: inactivity_watchdog',
+        finalState: { ...childState, error: undefined } as any,
+        reason: 'error',
+      });
+
+      const call = updateToolMessage.mock.calls.at(-1)?.[1];
+      expect(call.content).toBe(
+        'Sub-agent did not complete (error): the sub-agent stopped making progress and the platform ended it (inactivity_watchdog). ' +
+          'Anything it already did (searches, pages read, documents written) is kept in its thread.',
+      );
+      expect(call.pluginError).toEqual({ message: 'Operation abandoned: inactivity_watchdog' });
+    });
+
+    // "Budget exceeded" alone reads like a per-sub-agent allowance, so parents
+    // retried or fanned out more sub-agents against the same exhausted limit.
+    describe('billing-limit failures', () => {
+      const budgetError = (type: string, budgetTypeAtError?: string) => ({
+        body: {
+          budget: {
+            availableCredits: 24_659,
+            budgetTypeAtError,
+            requiredCredits: 50_638,
+          },
+          message: 'Budget exceeded',
+        },
+        message: 'Budget exceeded',
+        type,
+      });
+      const bridgeContent = async (error: unknown) => {
+        await service.completeSubAgentBridge({
+          ...bridgeParams,
+          finalState: { ...childState, error } as any,
+          reason: 'error',
+        });
+        return updateToolMessage.mock.calls.at(-1)?.[1];
+      };
+
+      it('explains a personal credit shortfall without quoting the balance', async () => {
+        const error = budgetError('InsufficientBudgetForModel', 'subscription');
+        const call = await bridgeContent(error);
+
+        expect(call.content).toBe(
+          'Sub-agent did not complete (error): stopped by a LobeHub billing limit (InsufficientBudgetForModel): ' +
+            "the account's LobeHub credits are too low for this model; the account owner has to top up or upgrade. " +
+            'This limit is shared by every sub-agent and by this conversation, so retrying or dispatching more sub-agents on the same model will not get past it; ' +
+            'a sub-agent that runs on a less expensive model may still fit. ' +
+            'Otherwise finish with what you already have and tell the user about the limit.',
+        );
+        expect(call.content).not.toMatch(/24659|24,659|50638/);
+        expect(call.pluginError).toEqual(error);
+      });
+
+      it.each([
+        [
+          'workspace',
+          "the workspace's shared LobeHub credits can't cover this model's estimated cost",
+        ],
+        [
+          'workspace_member',
+          "this member's workspace credit allowance can't cover this model's estimated cost",
+        ],
+      ])('names the %s allowance as the one to raise', async (scope, expected) => {
+        const call = await bridgeContent(budgetError('InsufficientBudgetForModel', scope));
+
+        expect(call.content).toContain(expected);
+        expect(call.content).not.toContain('top up');
+      });
+
+      it('points plan-limit failures at the plan, not at credits', async () => {
+        const call = await bridgeContent(budgetError('SubscriptionPlanLimit', 'subscription'));
+
+        expect(call.content).toContain(
+          'plan limit was reached or the plan does not cover this model',
+        );
+      });
+
+      // InsufficientBudgetForModel still leaves credits in the allowance, so a
+      // cheaper model can fit; only an exhausted plan makes every dispatch futile.
+      it('keeps the cheaper-model path open for a model-cost shortfall only', async () => {
+        const shortfall = await bridgeContent(
+          budgetError('InsufficientBudgetForModel', 'workspace_member'),
+        );
+        expect(shortfall.content).toContain('on the same model will not get past it');
+        expect(shortfall.content).toContain('less expensive model may still fit');
+
+        const exhausted = await bridgeContent(budgetError('FreePlanLimit', 'workspace'));
+        expect(exhausted.content).toContain("the workspace's shared LobeHub credits are used up");
+        expect(exhausted.content).toContain('more sub-agents will not get past it');
+        expect(exhausted.content).not.toContain('less expensive model');
+      });
     });
 
     it('truncates an oversized child error so it cannot bloat the parent context', async () => {

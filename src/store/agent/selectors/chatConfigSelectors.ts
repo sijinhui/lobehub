@@ -34,9 +34,6 @@ const isMemoryToolEnabled = (s: AgentStoreState) =>
 const isLocalSystemEnabled = (s: AgentStoreState) =>
   chatConfigByIdSelectors.isLocalSystemEnabledById(s.activeAgentId || '')(s);
 
-const isCloudSandboxEnabled = (s: AgentStoreState) =>
-  chatConfigByIdSelectors.getRuntimeModeById(s.activeAgentId || '')(s) === 'cloud';
-
 const skillActivateMode = (s: AgentStoreState) =>
   chatConfigByIdSelectors.getSkillActivateModeById(s.activeAgentId || '')(s);
 
@@ -58,7 +55,6 @@ export const agentChatConfigSelectors = {
   enableHistoryDivider,
   historyCount,
   isAgentEnableSearch,
-  isCloudSandboxEnabled,
   isLocalSystemEnabled,
   isMemoryToolEnabled,
   searchFCModel,
